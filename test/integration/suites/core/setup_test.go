@@ -16,15 +16,16 @@ package core_test
 
 import (
 	"encoding/json"
+	"os"
 	"testing"
 	"time"
 
+	ctrlinstance "github.com/kro-run/kro/pkg/controller/instance"
+	"github.com/kro-run/kro/test/integration/environment"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	"k8s.io/apimachinery/pkg/runtime"
-
-	ctrlinstance "github.com/kro-run/kro/pkg/controller/instance"
-	"github.com/kro-run/kro/test/integration/environment"
+	"sigs.k8s.io/controller-runtime/pkg/log/zap"
 )
 
 var env *environment.Environment
@@ -32,13 +33,16 @@ var env *environment.Environment
 func TestCore(t *testing.T) {
 	RegisterFailHandler(Fail)
 	BeforeSuite(func() {
+		baseLog := zap.New(zap.WriteTo(os.Stdout), zap.UseDevMode(true))
 		var err error
-		env, err = environment.New(
+		env, err = environment.NewWithContext(t.Context(),
 			environment.ControllerConfig{
 				AllowCRDDeletion: true,
 				ReconcileConfig: ctrlinstance.ReconcileConfig{
 					DefaultRequeueDuration: 5 * time.Second,
 				},
+				Logger: &baseLog,
+				// Logger: &GinkgoLogr,
 			},
 		)
 		Expect(err).NotTo(HaveOccurred())

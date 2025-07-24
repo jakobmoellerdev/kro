@@ -145,6 +145,7 @@ type Handler func(ctx context.Context, req ctrl.Request) error
 type factoryWrapper struct {
 	factory       dynamicinformer.DynamicSharedInformerFactory
 	shutdown      func()
+	ctx           context.Context
 	registrations map[schema.GroupVersionResource]cache.ResourceEventHandlerRegistration
 }
 
@@ -214,7 +215,6 @@ func (dc *DynamicController) WaitForInformersSync(stopCh <-chan struct{}) bool {
 // Run starts the DynamicController.
 func (dc *DynamicController) Run(ctx context.Context) error {
 	defer utilruntime.HandleCrash()
-	defer dc.queue.ShutDown()
 
 	dc.log.Info("Starting dynamic controller")
 	defer dc.log.Info("Shutting down dynamic controller")
@@ -440,6 +440,7 @@ func (dc *DynamicController) StartServingGVK(
 		if err := dc.refreshResourceHandlers(resourceHandlers, fw); err != nil {
 			return fmt.Errorf("failed to refresh resource handlers for instance gvr %s: %w", gvr, err)
 		}
+		fw.factory.Start(ctx.Done())
 
 		// Even thought the fw is already registered, we should still
 		// update the instanceHandler, as it might have changed.
@@ -491,29 +492,27 @@ func (dc *DynamicController) StartServingGVK(
 
 	dc.handlers.Store(gvr, instanceHandler)
 
-	informerContext := context.Background()
-	cancelableContext, cancel := context.WithCancel(informerContext)
-	// Start the factory
-	go func() {
-		dc.log.V(1).Info("Starting factory", "gvr", gvr)
-		factory.Start(cancelableContext.Done())
-	}()
+	cancelableContext, cancel := context.WithCancel(context.Background())
+	dc.log.V(1).Info("Starting informer factory", "gvr", gvr)
+	factory.Start(cancelableContext.Done())
 
 	dc.log.V(1).Info("Waiting for cache sync", "gvr", gvr)
 	startTime := time.Now()
 	// Wait for cache sync with a timeout
-	synced := cache.WaitForCacheSync(cancelableContext.Done(), informer.HasSynced)
+	synced := factory.WaitForCacheSync(cancelableContext.Done())
 	syncDuration := time.Since(startTime)
-	informerSyncDuration.WithLabelValues(gvr.String()).Observe(syncDuration.Seconds())
-
-	if !synced {
-		cancel()
-		return fmt.Errorf("failed to sync factory cache for GVR %s", gvr)
+	for gvr, synced := range synced {
+		if !synced {
+			cancel()
+			return fmt.Errorf("failed to sync informer cache for GVR %s", gvr)
+		}
 	}
+	informerSyncDuration.WithLabelValues(gvr.String()).Observe(syncDuration.Seconds())
 
 	dc.factories.Store(gvr, &factoryWrapper{
 		factory:       factory,
 		shutdown:      cancel,
+		ctx:           cancelableContext,
 		registrations: registrations,
 	})
 	gvrCount.Inc()
