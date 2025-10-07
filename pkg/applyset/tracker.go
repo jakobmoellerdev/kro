@@ -54,8 +54,8 @@ type ApplyableObject struct {
 	// TODO(barney-s): need to exapnd on these: https://github.com/kro-run/kro/issues/542
 	ExternalRef bool
 
-	// lastReadRevision is the revision of the object that was last read from the cluster.
-	lastReadRevision string
+	// LastReadRevision is the revision of the object that was last read from the cluster.
+	LastReadRevision string
 }
 
 func (a *ApplyableObject) String() string {

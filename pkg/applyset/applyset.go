@@ -29,9 +29,9 @@ import (
 	"reflect"
 	"sort"
 	"strings"
+	"sync"
 
 	"github.com/go-logr/logr"
-	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -97,7 +97,7 @@ Example Usage:
 	}
 */
 type Set interface {
-	Add(ctx context.Context, obj ApplyableObject) (*unstructured.Unstructured, error)
+	Add(ctx context.Context, obj ApplyableObject) error
 	Apply(ctx context.Context, prune bool) (*ApplyResult, error)
 	DryRun(ctx context.Context, prune bool) (*ApplyResult, error)
 }
@@ -186,7 +186,7 @@ func New(
 				FieldManager: config.FieldManager,
 				Force:        true,
 			},
-			//deleteOptions: metav1.DeleteOptions{},
+			// deleteOptions: metav1.DeleteOptions{},
 		},
 		log: config.Log,
 	}
@@ -325,41 +325,19 @@ func (a *applySet) resourceClient(obj Applyable) (dynamic.ResourceInterface, err
 	return dynResource, nil
 }
 
-func (a *applySet) Add(ctx context.Context, obj ApplyableObject) (*unstructured.Unstructured, error) {
+func (a *applySet) Add(ctx context.Context, obj ApplyableObject) error {
 	restMapping, err := a.getRestMapping(obj)
 	if err != nil {
-		return nil, err
+		return err
 	}
 	if err := a.getAndRecordNamespace(obj, restMapping); err != nil {
-		return nil, err
+		return err
 	}
 	obj.SetLabels(a.InjectApplysetLabels(a.injectToolLabels(obj.GetLabels())))
 
-	dynResource, err := a.resourceClient(obj)
-	if err != nil {
-		return nil, err
-	}
-	observed, err := dynResource.Get(ctx,
-		obj.GetName(),
-		metav1.GetOptions{},
-	)
-	if err != nil {
-		if apierrors.IsNotFound(err) {
-			observed = nil
-		} else {
-			return nil, fmt.Errorf("error getting object from cluster: %w", err)
-		}
-	}
-	if observed != nil {
-		// Record the last read revision of the object.
-		obj.lastReadRevision = observed.GetResourceVersion()
-	}
-	a.log.V(2).Info("adding object to applyset", "object", obj.String(), "cluster-revision", obj.lastReadRevision)
+	a.log.V(2).Info("adding object to applyset", "object", obj.String(), "cluster-revision", obj.LastReadRevision)
 
-	if err := a.desired.Add(obj); err != nil {
-		return nil, err
-	}
-	return observed, nil
+	return a.desired.Add(obj)
 }
 
 // ID is the label value that we are using to identify this applyset.
@@ -544,17 +522,25 @@ func (a *applySet) apply(ctx context.Context, dryRun bool) (*ApplyResult, error)
 	if dryRun {
 		options.DryRun = []string{"All"}
 	}
+	wg := sync.WaitGroup{}
+	mu := sync.Mutex{}
+	wg.Add(len(a.desired.objects))
 	for _, obj := range a.desired.objects {
-
 		dynResource, err := a.resourceClient(obj)
 		if err != nil {
 			return results, err
 		}
-		lastApplied, err := dynResource.Apply(ctx, obj.GetName(), obj.Unstructured, options)
-		results.recordApplied(obj, lastApplied, err)
-		a.log.V(2).Info("applied object", "object", obj.String(), "applied-revision", lastApplied.GetResourceVersion(),
-			"error", err)
+		go func() {
+			defer wg.Done()
+			lastApplied, err := dynResource.Apply(ctx, obj.GetName(), obj.Unstructured, options)
+			mu.Lock()
+			defer mu.Unlock()
+			results.recordApplied(obj, lastApplied, err)
+			a.log.V(2).Info("applied object", "object", obj.String(), "applied-revision", lastApplied.GetResourceVersion(),
+				"error", err)
+		}()
 	}
+	wg.Wait()
 
 	return results, nil
 }

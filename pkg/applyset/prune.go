@@ -75,7 +75,7 @@ func (a *applySet) findAllObjectsToPrune(
 		results     []PruneObject
 	}
 
-	tasks := []*task{}
+	var tasks []*task
 
 	restMappings := map[schema.GroupKind]*meta.RESTMapping{}
 	for gk, restMapping := range a.desiredRESTMappings {

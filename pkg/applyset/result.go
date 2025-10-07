@@ -47,7 +47,7 @@ func (ao *AppliedObject) HasClusterMutation() bool {
 		return false
 	}
 
-	return ao.lastReadRevision != ao.LastApplied.GetResourceVersion()
+	return ao.LastReadRevision != ao.LastApplied.GetResourceVersion()
 }
 
 type PrunedObject struct {

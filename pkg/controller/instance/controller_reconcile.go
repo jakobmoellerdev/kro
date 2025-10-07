@@ -195,18 +195,29 @@ func (igr *instanceGraphReconciler) reconcileInstance(ctx context.Context) error
 			break
 		}
 
+		rc := igr.getResourceClient(resourceID)
+		fromCluster, err := rc.Get(ctx, resource.GetName(), metav1.GetOptions{})
+		if err != nil {
+			if !apierrors.IsNotFound(err) {
+				return fmt.Errorf("failed to check resource %s existence: %w", resourceID, err)
+			}
+		}
+
 		applyable := applyset.ApplyableObject{
 			Unstructured: resource,
 			ID:           resourceID,
 			ExternalRef:  igr.runtime.ResourceDescriptor(resourceID).IsExternalRef(),
 		}
-		clusterObj, err := aset.Add(ctx, applyable)
-		if err != nil {
+		if fromCluster != nil {
+			applyable.LastReadRevision = fromCluster.GetResourceVersion()
+		}
+
+		if err := aset.Add(ctx, applyable); err != nil {
 			return fmt.Errorf("failed to add resource to applyset: %w", err)
 		}
 
-		if clusterObj != nil {
-			igr.runtime.SetResource(resourceID, clusterObj)
+		if fromCluster != nil {
+			igr.runtime.SetResource(resourceID, fromCluster)
 			igr.updateResourceReadiness(resourceID)
 			// Synchronize runtime state after each resource
 			if _, err := igr.runtime.Synchronize(); err != nil {
