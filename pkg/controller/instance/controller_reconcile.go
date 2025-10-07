@@ -17,8 +17,10 @@ package instance
 import (
 	"context"
 	"fmt"
+	"sync"
 
 	"github.com/go-logr/logr"
+	"golang.org/x/sync/errgroup"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -167,6 +169,32 @@ func (igr *instanceGraphReconciler) reconcileInstance(ctx context.Context) error
 		return igr.delayedRequeue(fmt.Errorf("failed creating an applyset: %w", err))
 	}
 
+	preFetched := make(map[string]*unstructured.Unstructured)
+	fetchMu := sync.Mutex{}
+	fetchEg, egctx := errgroup.WithContext(ctx)
+	for _, resourceID := range igr.runtime.TopologicalOrder() {
+		resource, state := igr.runtime.GetResource(resourceID)
+		if state != runtime.ResourceStateResolved {
+			continue
+		}
+		rc := igr.getResourceClient(resourceID)
+		fetchEg.Go(func() error {
+			fetched, err := rc.Get(egctx, resource.GetName(), metav1.GetOptions{})
+			if err != nil {
+				if !apierrors.IsNotFound(err) {
+					return fmt.Errorf("failed to fetch resource %s: %w", resourceID, err)
+				}
+			}
+			fetchMu.Lock()
+			defer fetchMu.Unlock()
+			preFetched[resourceID] = fetched
+			return nil
+		})
+	}
+	if err := fetchEg.Wait(); err != nil {
+		return fmt.Errorf("failed to pre-fetch resources: %w", err)
+	}
+
 	unresolvedResourceID := ""
 	prune := true
 	// Reconcile resources in topological order
@@ -195,11 +223,14 @@ func (igr *instanceGraphReconciler) reconcileInstance(ctx context.Context) error
 			break
 		}
 
-		rc := igr.getResourceClient(resourceID)
-		fromCluster, err := rc.Get(ctx, resource.GetName(), metav1.GetOptions{})
-		if err != nil {
-			if !apierrors.IsNotFound(err) {
-				return fmt.Errorf("failed to check resource %s existence: %w", resourceID, err)
+		fromCluster, ok := preFetched[resourceID]
+		if !ok {
+			if fromCluster, err = igr.
+				getResourceClient(resourceID).
+				Get(ctx, resource.GetName(), metav1.GetOptions{}); err != nil {
+				if !apierrors.IsNotFound(err) {
+					return fmt.Errorf("failed to check resource %s existence: %w", resourceID, err)
+				}
 			}
 		}
 
