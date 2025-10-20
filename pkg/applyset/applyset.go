@@ -26,13 +26,13 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"fmt"
-	"reflect"
 	"sort"
 	"strings"
 	"sync"
 
 	"github.com/go-logr/logr"
 	"golang.org/x/sync/errgroup"
+	"k8s.io/apimachinery/pkg/api/equality"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -472,12 +472,13 @@ func (a *applySet) updateParentLabelsAndAnnotations(
 		},
 	})
 	// update parent in the cluster.
-	if !reflect.DeepEqual(original.GetLabels(), parentPatch.GetLabels()) ||
-		!reflect.DeepEqual(original.GetAnnotations(), parentPatch.GetAnnotations()) {
+
+	if !equality.Semantic.DeepEqual(original.GetLabels(), parentPatch.GetLabels()) ||
+		!equality.Semantic.DeepEqual(original.GetAnnotations(), parentPatch.GetAnnotations()) {
 		if _, err := a.parentClient.Apply(ctx, a.parent.GetName(), parentPatch, options); err != nil {
 			return nil, nil, fmt.Errorf("error updating parent %w", err)
 		}
-		a.log.V(2).Info("updated parent labels and annotations", "parent-name", a.parent.GetName(),
+		a.log.V(1).Info("updated parent labels and annotations", "parent-name", a.parent.GetName(),
 			"parent-namespace", a.parent.GetNamespace(),
 			"parent-gvk", a.parent.GroupVersionKind(),
 			"parent-labels", desiredLabels, "parent-annotations", desiredAnnotations)
