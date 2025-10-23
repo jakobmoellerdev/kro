@@ -26,6 +26,7 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"fmt"
+	"maps"
 	"sort"
 	"strings"
 	"sync"
@@ -425,7 +426,7 @@ func (a *applySet) updateParentLabelsAndAnnotations(
 
 	// Generate and append the desired labels to the parent labels
 	desiredLabels := a.desiredParentLabels()
-	labels := a.parent.GetLabels()
+	labels := maps.Clone(a.parent.GetLabels())
 	if labels == nil {
 		labels = make(map[string]string)
 	}
@@ -435,7 +436,7 @@ func (a *applySet) updateParentLabelsAndAnnotations(
 
 	// Get the desired annotations and append them to the parent
 	desiredAnnotations, returnNamespaces, returnGKs := a.desiredParentAnnotations(mode == updateToSuperset)
-	annotations := a.parent.GetAnnotations()
+	annotations := maps.Clone(a.parent.GetAnnotations())
 	if annotations == nil {
 		annotations = make(map[string]string)
 	}
