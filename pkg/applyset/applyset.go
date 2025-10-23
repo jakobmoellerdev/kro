@@ -448,29 +448,17 @@ func (a *applySet) updateParentLabelsAndAnnotations(
 		Force:        false,
 	}
 
-	// Convert labels to map[string]interface{} for the unstructured object
-	labelsMap := make(map[string]interface{})
-	for k, v := range labels {
-		labelsMap[k] = v
-	}
-
-	// Convert annotations to map[string]interface{} for the unstructured object
-	annotationsMap := make(map[string]interface{})
-	for k, v := range annotations {
-		annotationsMap[k] = v
-	}
-
 	parentPatch := &unstructured.Unstructured{}
 	parentPatch.SetUnstructuredContent(map[string]interface{}{
 		"apiVersion": a.parent.APIVersion,
 		"kind":       a.parent.Kind,
 		"metadata": map[string]interface{}{
-			"name":        a.parent.GetName(),
-			"namespace":   a.parent.GetNamespace(),
-			"labels":      labelsMap,
-			"annotations": annotationsMap,
+			"name":      a.parent.GetName(),
+			"namespace": a.parent.GetNamespace(),
 		},
 	})
+	parentPatch.SetAnnotations(annotations)
+	parentPatch.SetLabels(labels)
 	// update parent in the cluster.
 
 	if !equality.Semantic.DeepEqual(original.GetLabels(), parentPatch.GetLabels()) ||
