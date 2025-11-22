@@ -6,64 +6,142 @@ import (
 	"github.com/kubernetes-sigs/kro/pkg/applyset"
 	"github.com/kubernetes-sigs/kro/pkg/metadata"
 	"github.com/kubernetes-sigs/kro/pkg/runtime"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/client-go/dynamic"
 )
 
 func (c *Controller) reconcileResources(rcx *ReconcileContext) error {
 	rcx.Log.V(2).Info("Reconciling resources")
 
-	order := rcx.Runtime.TopologicalOrder()
-
-	// ---------------------------------------------------------
-	// 1. Prepare ApplySet
-	// ---------------------------------------------------------
-	applySet, err := c.createApplySet(rcx)
+	// 1. Compute per-level topological order
+	levels, err := rcx.Runtime.DAG().TopologicalSortLevels()
 	if err != nil {
-		return rcx.delayedRequeue(fmt.Errorf("applyset setup failed: %w", err))
+		return rcx.delayedRequeue(fmt.Errorf("topological order failed: %w", err))
 	}
 
-	// Values updated during the loop
+	// unresolved resource blocks next level
 	var unresolved string
-	prune := true
 
-	// ---------------------------------------------------------
-	// 2. Reconcile each resource in topological order
-	// ---------------------------------------------------------
-	for _, id := range order {
-		if err := c.reconcileResource(rcx, applySet, id, &unresolved, &prune); err != nil {
-			return err
+	// 2. Process level-by-level in order
+	for lvlIdx, levelIDs := range levels {
+		rcx.Log.V(2).Info("Processing level", "level", lvlIdx, "ids", levelIDs)
+
+		// 2a. Ensure parent exists for this level
+		parent, err := c.newLevelParent(rcx, lvlIdx)
+		if err != nil {
+			return rcx.delayedRequeue(err)
+		}
+
+		// 2b. Create ApplySet for this level
+		lbl, err := metadata.NewInstanceLabeler(rcx.Runtime.GetInstance()).
+			Merge(rcx.Labeler)
+		if err != nil {
+			return rcx.delayedRequeue(fmt.Errorf("labeler merge: %w", err))
+		}
+
+		cfg := applyset.Config{
+			ToolLabels:   lbl.Labels(),
+			FieldManager: FieldManagerForApplyset,
+			ToolingID:    KROTooling,
+			Log:          rcx.Log,
+		}
+
+		levelSet, err := applyset.New(parent, rcx.RestMapper, rcx.Client, cfg)
+		if err != nil {
+			return rcx.delayedRequeue(fmt.Errorf("applyset (level=%d) creation failed: %w", lvlIdx, err))
+		}
+
+		prune := true
+
+		// 2c. Sequential Add (prepare + add)
+		for _, id := range levelIDs {
+
+			st := &ResourceState{State: ResourceStateInProgress}
+			rcx.StateManager.ResourceStates[id] = st
+
+			// Should we process?
+			want, err := rcx.Runtime.ReadyToProcessResource(id)
+			if err != nil || !want {
+				st.State = ResourceStateSkipped
+				rcx.Runtime.IgnoreResource(id)
+				continue
+			}
+
+			// Must be resolved
+			desired, rstate := rcx.Runtime.GetResource(id)
+			if rstate != runtime.ResourceStateResolved {
+				unresolved = id
+				prune = false
+				continue
+			}
+
+			// Dependencies must be ready
+			if !rcx.Runtime.AreDependenciesReady(id) {
+				unresolved = id
+				prune = false
+				continue
+			}
+
+			desc := rcx.Runtime.ResourceDescriptor(id)
+
+			if desc.IsExternalRef() {
+				// ExternalRef: read-only, never applied or pruned
+				if err := c.handleExternalRef(rcx, id, st); err != nil {
+					return rcx.delayedRequeue(err)
+				}
+				continue
+			}
+
+			// Normal managed resource → Add to the applySet
+			applyable := applyset.ApplyableObject{
+				Unstructured: desired,
+				ID:           id,
+			}
+
+			actual, err := levelSet.Add(rcx.Ctx, applyable)
+			if err != nil {
+				st.State = ResourceStateError
+				st.Err = err
+				return rcx.delayedRequeue(err)
+			}
+
+			// Immediate update from Add (SSA readback)
+			if actual != nil {
+				rcx.Runtime.SetResource(id, actual)
+				updateReadiness(rcx, id)
+				if _, err := rcx.Runtime.Synchronize(); err != nil {
+					return rcx.delayedRequeue(err)
+				}
+			}
+		}
+
+		// 2d. Perform concurrent Apply
+		result, err := levelSet.Apply(rcx.Ctx, prune)
+		if err != nil {
+			return rcx.delayedRequeue(fmt.Errorf("apply/prune (level=%d) failed: %w", lvlIdx, err))
+		}
+
+		// 2e. Process Apply results
+		if err := c.processApplyResults(rcx, result); err != nil {
+			return rcx.delayedRequeue(err)
+		}
+
+		if result.HasClusterMutation() {
+			return rcx.delayedRequeue(fmt.Errorf("cluster mutated"))
+		}
+
+		if unresolved != "" {
+			return rcx.delayedRequeue(
+				fmt.Errorf("waiting for unresolved resource %q", unresolved),
+			)
 		}
 	}
 
-	// ---------------------------------------------------------
-	// 3. Apply all accumulated changes
-	// ---------------------------------------------------------
-	result, err := applySet.Apply(rcx.Ctx, prune)
-	if err != nil {
-		return rcx.delayedRequeue(fmt.Errorf("apply/prune failed: %w", err))
-	}
-
-	// ---------------------------------------------------------
-	// 4. Process results and update runtime state
-	// ---------------------------------------------------------
-	if err := c.processApplyResults(rcx, result); err != nil {
-		return rcx.delayedRequeue(err)
-	}
-
-	// ---------------------------------------------------------
-	// 5. Final resolution checks
-	// ---------------------------------------------------------
-	if unresolved != "" {
-		return rcx.delayedRequeue(fmt.Errorf("waiting for unresolved resource %q", unresolved))
-	}
-	if result.HasClusterMutation() {
-		/* We must requeue after cluster mutation so CEL values re-evaluate. */
-		return rcx.delayedRequeue(fmt.Errorf("cluster mutated"))
-	}
-
+	// All levels finished
 	return nil
 }
 
@@ -256,7 +334,7 @@ func (c *Controller) processApplyResults(
 		if r.Error != nil {
 			st.State = ResourceStateError
 			st.Err = r.Error
-			rcx.Log.V(1).Info("apply error", "id", r.ID, "error", r.Error)
+			rcx.Log.V(1).Info("Apply error", "id", r.ID, "error", r.Error)
 			continue
 		}
 
@@ -283,4 +361,83 @@ func (c *Controller) processApplyResults(
 	}
 
 	return nil
+}
+
+// newLevelParent returns the stable parent object for a given DAG level.
+// Parents:
+//   - Are ConfigMaps (harmless, cheap, namespaced, always present)
+//   - Have stable names: <instance>-lvl-<level>
+//   - Are CREATE-or-GET: never mutated after creation
+//   - Carry labels to bind children to this parent for lineage pruning
+//
+// This keeps ApplySet semantics consistent even if DAG levels change.
+func (c *Controller) newLevelParent(
+	rcx *ReconcileContext,
+	level int,
+) (*unstructured.Unstructured, error) {
+
+	inst := rcx.Runtime.GetInstance()
+	name := fmt.Sprintf("%s-lvl-%d", inst.GetName(), level)
+
+	ns := inst.GetNamespace()
+	if ns == "" {
+		ns = metav1.NamespaceDefault
+	}
+
+	// -----------------------------
+	// Build desired object structure
+	// -----------------------------
+	parent := &unstructured.Unstructured{}
+	parent.SetAPIVersion("v1")
+	parent.SetKind("ConfigMap")
+	parent.SetName(name)
+	parent.SetNamespace(ns)
+
+	// Labels used by ApplySet to group children
+	labels := map[string]string{
+		"kro.run/applyset-scope": "level-parent",
+		"kro.run/instance":       inst.GetName(),
+		"kro.run/level":          fmt.Sprintf("%d", level),
+	}
+	parent.SetLabels(labels)
+
+	gvr := schema.GroupVersionResource{
+		Group:    "",
+		Version:  "v1",
+		Resource: "configmaps",
+	}
+
+	// -----------------------------
+	// Try to CREATE
+	// -----------------------------
+	created, err := c.client.Dynamic().
+		Resource(gvr).
+		Namespace(ns).
+		Create(rcx.Ctx, parent, metav1.CreateOptions{})
+
+	if err == nil {
+		rcx.Log.V(3).Info("Created new level parent",
+			"name", name, "namespace", ns, "level", level)
+		return created, nil
+	}
+
+	// -----------------------------
+	// Already exists → GET
+	// -----------------------------
+	if apierrors.IsAlreadyExists(err) {
+		existing, err := c.client.Dynamic().
+			Resource(gvr).
+			Namespace(ns).
+			Get(rcx.Ctx, name, metav1.GetOptions{})
+		if err != nil {
+			return nil, fmt.Errorf("failed to get existing level parent %s/%s: %w", ns, name, err)
+		}
+
+		// DO NOT mutate existing → keeps lineage clean
+		rcx.Log.V(3).Info("Reusing existing level parent",
+			"name", name, "namespace", ns, "level", level)
+		return existing, nil
+	}
+
+	return nil, fmt.Errorf("failed to create level parent %s/%s: %w", ns, name, err)
 }

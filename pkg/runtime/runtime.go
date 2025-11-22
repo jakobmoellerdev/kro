@@ -20,6 +20,7 @@ import (
 	"strings"
 
 	"github.com/google/cel-go/cel"
+	"github.com/kubernetes-sigs/kro/pkg/graph/dag"
 	"golang.org/x/exp/maps"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 
@@ -45,12 +46,12 @@ var _ Interface = &ResourceGraphDefinitionRuntime{}
 func NewResourceGraphDefinitionRuntime(
 	instance Resource,
 	resources map[string]Resource,
-	topologicalOrder []string,
+	dag *dag.DirectedAcyclicGraph[string],
 ) (*ResourceGraphDefinitionRuntime, error) {
 	r := &ResourceGraphDefinitionRuntime{
 		instance:                     instance,
 		resources:                    resources,
-		topologicalOrder:             topologicalOrder,
+		dag:                          dag,
 		resolvedResources:            make(map[string]*unstructured.Unstructured),
 		runtimeVariables:             make(map[string][]*expressionEvaluationState),
 		expressionsCache:             make(map[string]*expressionEvaluationState),
@@ -165,7 +166,7 @@ type ResourceGraphDefinitionRuntime struct {
 	// ensures that resources are processed in a way that respects their
 	// dependencies, preventing circular dependencies and ensuring efficient
 	// synchronization.
-	topologicalOrder []string
+	dag *dag.DirectedAcyclicGraph[string]
 
 	// ignoredByConditionsResources holds the resources who's defined conditions returned false
 	// or who's dependencies are ignored
@@ -173,8 +174,8 @@ type ResourceGraphDefinitionRuntime struct {
 }
 
 // TopologicalOrder returns the topological order of resources.
-func (rt *ResourceGraphDefinitionRuntime) TopologicalOrder() []string {
-	return rt.topologicalOrder
+func (rt *ResourceGraphDefinitionRuntime) DAG() *dag.DirectedAcyclicGraph[string] {
+	return rt.dag
 }
 
 // ResourceDescriptor returns the descriptor for a given resource id.
