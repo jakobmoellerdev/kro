@@ -98,6 +98,7 @@ func BaseDeclarations() []cel.EnvOption {
 		ext.Lists(),
 		ext.Strings(),
 		cel.OptionalTypes(),
+		cel.EnableMacroCallTracking(),
 		ext.Encoders(),
 		// Kubernetes CEL libraries: enable url(), getHost(), regex helpers, etc.
 		// See https://kubernetes.io/docs/reference/using-api/cel/ and
@@ -105,6 +106,7 @@ func BaseDeclarations() []cel.EnvOption {
 		k8scellib.URLs(),
 		k8scellib.Regex(),
 		library.Random(),
+		library.Collections(),
 	}
 }
 
