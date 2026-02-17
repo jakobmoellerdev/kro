@@ -94,6 +94,11 @@ type Builder struct {
 	restMapper     meta.RESTMapper
 }
 
+// SchemaResolver returns the schema resolver used by the builder
+func (b *Builder) SchemaResolver() resolver.SchemaResolver {
+	return b.schemaResolver
+}
+
 // NewResourceGraphDefinition creates a new ResourceGraphDefinition object from the given ResourceGraphDefinition
 // CRD. The ResourceGraphDefinition object is a fully processed and validated representation
 // of the resource graph definition CRD, it's underlying resources, and the relationships between

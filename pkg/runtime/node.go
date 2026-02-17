@@ -20,8 +20,10 @@ import (
 	"slices"
 
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 
 	"github.com/kubernetes-sigs/kro/pkg/graph"
+	graphschema "github.com/kubernetes-sigs/kro/pkg/graph/schema"
 	"github.com/kubernetes-sigs/kro/pkg/graph/variable"
 	"github.com/kubernetes-sigs/kro/pkg/runtime/resolver"
 )
@@ -43,6 +45,9 @@ type Node struct {
 	forEachExprs     []*expressionEvaluationState
 	templateExprs    []*expressionEvaluationState
 	templateVars     []*variable.ResourceField
+
+	// converter handles schema-based type conversion for observed resources
+	converter *graphschema.ObjectConverter
 }
 
 var identityPaths = []string{
@@ -618,19 +623,34 @@ func (n *Node) buildContext(only ...string) map[string]any {
 		if dep.Spec.Meta.Type == graph.NodeTypeCollection {
 			items := make([]any, len(dep.observed))
 			for i, obj := range dep.observed {
-				items[i] = obj.Object
+				// Convert each collection item to match its schema
+				converted := n.convertResource(obj.Object, dep.Spec.Meta.GVR)
+				items[i] = converted
 			}
 			ctx[depID] = items
 		} else {
 			obj := dep.observed[0].Object
+
+			// Convert to match schema types (e.g., Secret data fields to bytes)
+			converted := n.convertResource(obj, dep.Spec.Meta.GVR)
+
 			// For schema (instance), strip status - users should only access spec/metadata.
 			if depID == graph.InstanceNodeID {
-				obj = withStatusOmitted(obj)
+				converted = withStatusOmitted(converted)
 			}
-			ctx[depID] = obj
+			ctx[depID] = converted
 		}
 	}
 	return ctx
+}
+
+// convertResource applies schema-based type conversion to a resource.
+// This ensures the unstructured object matches its OpenAPI schema types.
+func (n *Node) convertResource(obj map[string]interface{}, gvr schema.GroupVersionResource) map[string]interface{} {
+	if n.converter == nil {
+		return obj
+	}
+	return n.converter.ConvertForGVR(obj, gvr)
 }
 
 // withStatusOmitted returns a shallow copy of obj with the "status" key removed.

@@ -25,6 +25,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/apiserver/pkg/cel/openapi/resolver"
 	ctrl "sigs.k8s.io/controller-runtime"
 
 	kroclient "github.com/kubernetes-sigs/kro/pkg/client"
@@ -81,6 +82,7 @@ type Controller struct {
 
 	labeler         metadata.Labeler
 	reconcileConfig ReconcileConfig
+	schemaResolver  resolver.SchemaResolver
 }
 
 // NewController constructs a new controller with static RGD.
@@ -91,6 +93,7 @@ func NewController(
 	rgd *graph.Graph,
 	client kroclient.SetInterface,
 	labeler metadata.Labeler,
+	schemaResolver resolver.SchemaResolver,
 ) *Controller {
 	return &Controller{
 		log:             log,
@@ -99,6 +102,7 @@ func NewController(
 		rgd:             rgd,
 		labeler:         labeler,
 		reconcileConfig: reconcileConfig,
+		schemaResolver:  schemaResolver,
 	}
 }
 
@@ -125,7 +129,7 @@ func (c *Controller) Reconcile(ctx context.Context, req ctrl.Request) (err error
 	//--------------------------------------------------------------
 	// 2. Create a fresh runtime for this reconciliation
 	//--------------------------------------------------------------
-	runtimeObj, err := runtime.FromGraph(c.rgd, inst)
+	runtimeObj, err := runtime.FromGraph(c.rgd, inst, c.client.RESTMapper(), c.schemaResolver)
 	if err != nil {
 		log.Error(err, "failed to create runtime")
 		return err

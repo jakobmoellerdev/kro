@@ -123,6 +123,7 @@ func (r *ResourceGraphDefinitionReconciler) setupMicroController(
 		processedRGD,
 		r.clientSet,
 		labeler,
+		r.rgBuilder.SchemaResolver(),
 	)
 }
 

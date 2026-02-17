@@ -15,10 +15,13 @@
 package runtime
 
 import (
+	"k8s.io/apimachinery/pkg/api/meta"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apiserver/pkg/cel/openapi/resolver"
 
 	krocel "github.com/kubernetes-sigs/kro/pkg/cel"
 	"github.com/kubernetes-sigs/kro/pkg/graph"
+	graphschema "github.com/kubernetes-sigs/kro/pkg/graph/schema"
 	"github.com/kubernetes-sigs/kro/pkg/graph/variable"
 )
 
@@ -38,19 +41,30 @@ type Interface interface {
 // It holds nodes in topological order and provides access to the instance node.
 // Expression deduplication is done during FromGraph construction via a local cache.
 type Runtime struct {
-	order    []string
-	nodes    map[string]*Node
-	instance *Node
+	order     []string
+	nodes     map[string]*Node
+	instance  *Node
+	converter *graphschema.ObjectConverter
 }
 
 // FromGraph creates a new Runtime from a Graph and instance.
 // This is called at the start of each reconciliation.
-func FromGraph(g *graph.Graph, instance *unstructured.Unstructured) (*Runtime, error) {
+// The restMapper and schemaResolver are used to convert unstructured objects to match their schemas.
+func FromGraph(
+	g *graph.Graph,
+	instance *unstructured.Unstructured,
+	restMapper meta.RESTMapper,
+	schemaResolver resolver.SchemaResolver,
+) (*Runtime, error) {
 	instanceObj := instance.DeepCopy()
 
+	// Create unified converter for schema-based type conversions
+	converter := graphschema.NewObjectConverter(restMapper, schemaResolver)
+
 	rt := &Runtime{
-		order: g.TopologicalOrder,
-		nodes: make(map[string]*Node),
+		order:     g.TopologicalOrder,
+		nodes:     make(map[string]*Node),
+		converter: converter,
 	}
 
 	// Expression cache for non-iteration expressions only.
@@ -84,15 +98,17 @@ func FromGraph(g *graph.Graph, instance *unstructured.Unstructured) (*Runtime, e
 	// Phase 1: Create all nodes first (without deps wired).
 	for _, id := range rt.order {
 		rt.nodes[id] = &Node{
-			Spec: g.Nodes[id].DeepCopy(),
-			deps: make(map[string]*Node),
+			Spec:      g.Nodes[id].DeepCopy(),
+			deps:      make(map[string]*Node),
+			converter: converter,
 		}
 	}
 
 	// Create instance node.
 	instNode := &Node{
-		Spec: g.Instance.DeepCopy(),
-		deps: make(map[string]*Node),
+		Spec:      g.Instance.DeepCopy(),
+		deps:      make(map[string]*Node),
+		converter: converter,
 	}
 	instNode.SetObserved([]*unstructured.Unstructured{instanceObj})
 	rt.instance = instNode
