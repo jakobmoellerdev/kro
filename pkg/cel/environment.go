@@ -24,7 +24,6 @@ import (
 	"github.com/google/cel-go/ext"
 	apiservercel "k8s.io/apiserver/pkg/cel"
 	k8scellib "k8s.io/apiserver/pkg/cel/library"
-	"k8s.io/apiserver/pkg/cel/openapi"
 	"k8s.io/kube-openapi/pkg/validation/spec"
 
 	"github.com/kubernetes-sigs/kro/pkg/cel/library"
@@ -169,9 +168,10 @@ func defaultEnvironment(options ...EnvOption) (*cel.Env, *DeclTypeProvider, erro
 		//  - Variables use the original names (e.g "pod", "schema"...)
 
 		declTypes := make([]*apiservercel.DeclType, 0, len(opts.typedResources))
+		schemaCache := NewSchemaCache()
 
 		for name, schema := range opts.typedResources {
-			declType := SchemaDeclTypeWithMetadata(&openapi.Schema{Schema: schema}, false)
+			declType := schemaCache.Convert(schema, false)
 			if declType != nil {
 				typeName := TypeNamePrefix + name
 				declType = declType.MaybeAssignTypeName(typeName)
@@ -241,8 +241,9 @@ func CreateDeclTypeProvider(schemas map[string]*spec.Schema) *DeclTypeProvider {
 	}
 
 	declTypes := make([]*apiservercel.DeclType, 0, len(schemas))
+	schemaCache := NewSchemaCache()
 	for name, schema := range schemas {
-		declType := SchemaDeclTypeWithMetadata(&openapi.Schema{Schema: schema}, false)
+		declType := schemaCache.Convert(schema, false)
 		if declType != nil {
 			declType = declType.MaybeAssignTypeName(name)
 			declTypes = append(declTypes, declType)

@@ -27,7 +27,6 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/util/yaml"
-	"k8s.io/apiserver/pkg/cel/openapi"
 	"k8s.io/apiserver/pkg/cel/openapi/resolver"
 	"k8s.io/client-go/rest"
 	"k8s.io/kube-openapi/pkg/validation/spec"
@@ -260,11 +259,13 @@ func (b *Builder) NewResourceGraphDefinition(originalCR *v1alpha1.ResourceGraphD
 	}
 
 	// Expression cache avoids re-parsing identical CEL expressions within this build.
+	// Schema cache avoids re-converting identical *spec.Schema pointers.
 	exprCache := newExpressionCache()
+	schemaCache := krocel.NewSchemaCache()
 
 	// Validate and compile all resource CEL expressions.
 	for id, node := range nodes {
-		if err := validateAndCompileNode(node, inspector, typedEnv, schemas[id], typeProvider, exprCache); err != nil {
+		if err := validateAndCompileNode(node, inspector, typedEnv, schemas[id], typeProvider, exprCache, schemaCache); err != nil {
 			return nil, fmt.Errorf("failed to validate resource %q: %w", id, err)
 		}
 	}
@@ -969,7 +970,7 @@ func resolveSchemaAndTypeName(segments []fieldpath.Segment, rootSchema *spec.Sch
 // getExpectedTypeForField computes the expected CEL type for a field descriptor.
 // For standalone expressions, the type is derived from the OpenAPI schema at the path.
 // For string templates, the expected type is always string.
-func getExpectedTypeForField(descriptor *variable.FieldDescriptor, rootSchema *spec.Schema, resourceID string, typeProvider *krocel.DeclTypeProvider) *cel.Type {
+func getExpectedTypeForField(descriptor *variable.FieldDescriptor, rootSchema *spec.Schema, resourceID string, typeProvider *krocel.DeclTypeProvider, schemaCache *krocel.SchemaCache) *cel.Type {
 	if !descriptor.StandaloneExpression {
 		return cel.StringType
 	}
@@ -984,13 +985,13 @@ func getExpectedTypeForField(descriptor *variable.FieldDescriptor, rootSchema *s
 		return cel.DynType
 	}
 
-	return getCelTypeFromSchema(schema, typeName, typeProvider)
+	return getCelTypeFromSchema(schema, typeName, typeProvider, schemaCache)
 }
 
 // getCelTypeFromSchema looks up a pre-registered CEL type by name from the
 // provider (O(1) hash lookup). Falls back to converting the schema directly
 // for nested types that aren't registered at the top level.
-func getCelTypeFromSchema(schema *spec.Schema, typeName string, typeProvider *krocel.DeclTypeProvider) *cel.Type {
+func getCelTypeFromSchema(schema *spec.Schema, typeName string, typeProvider *krocel.DeclTypeProvider, schemaCache *krocel.SchemaCache) *cel.Type {
 	if typeProvider != nil {
 		if declType, found := typeProvider.FindDeclType(typeName); found {
 			return declType.CelType()
@@ -1001,7 +1002,7 @@ func getCelTypeFromSchema(schema *spec.Schema, typeName string, typeProvider *kr
 	if schema == nil {
 		return cel.DynType
 	}
-	declType := krocel.SchemaDeclTypeWithMetadata(&openapi.Schema{Schema: schema}, false)
+	declType := schemaCache.Convert(schema, false)
 	if declType == nil {
 		return cel.DynType
 	}
@@ -1042,7 +1043,7 @@ func lookupSchemaAtField(schema *spec.Schema, field string) *spec.Schema {
 // - readyWhen expressions (resource readiness conditions)
 //
 // Uses the shared inspectorEnv for AST inspection and typed env for compilation.
-func validateAndCompileNode(node *Node, inspector *ast.Inspector, env *cel.Env, nodeSchema *spec.Schema, typeProvider *krocel.DeclTypeProvider, cache *expressionCache) error {
+func validateAndCompileNode(node *Node, inspector *ast.Inspector, env *cel.Env, nodeSchema *spec.Schema, typeProvider *krocel.DeclTypeProvider, cache *expressionCache, schemaCache *krocel.SchemaCache) error {
 	// Track iterator types for extending template environment
 	var iteratorTypes map[string]*cel.Type
 
@@ -1056,7 +1057,7 @@ func validateAndCompileNode(node *Node, inspector *ast.Inspector, env *cel.Env, 
 	}
 
 	// Validate and compile template expressions
-	if err := validateAndCompileTemplates(env, node, nodeSchema, typeProvider, iteratorTypes, cache); err != nil {
+	if err := validateAndCompileTemplates(env, node, nodeSchema, typeProvider, iteratorTypes, cache, schemaCache); err != nil {
 		return err
 	}
 
@@ -1119,6 +1120,7 @@ func validateAndCompileTemplates(
 	typeProvider *krocel.DeclTypeProvider,
 	iteratorTypes map[string]*cel.Type,
 	cache *expressionCache,
+	schemaCache *krocel.SchemaCache,
 ) error {
 	// If we have iterator types (from forEach), extend the environment with those declarations
 	compileEnv := env
@@ -1136,7 +1138,7 @@ func validateAndCompileTemplates(
 
 	for _, templateVariable := range node.Variables {
 		// Compute expected type for this field
-		expectedType := getExpectedTypeForField(&templateVariable.FieldDescriptor, nodeSchema, node.Meta.ID, typeProvider)
+		expectedType := getExpectedTypeForField(&templateVariable.FieldDescriptor, nodeSchema, node.Meta.ID, typeProvider, schemaCache)
 
 		for _, expression := range templateVariable.Expressions {
 			// Parse, type-check, and compile
