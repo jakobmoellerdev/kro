@@ -136,31 +136,53 @@ func SchemaDeclTypeWithMetadata(s common.Schema, isResourceRoot bool) *apiserver
 			}
 			return mt
 		}
-		fields := make(map[string]*apiservercel.DeclField, len(s.Properties()))
-
 		required := map[string]bool{}
 		if s.Required() != nil {
 			for _, f := range s.Required() {
 				required[f] = true
 			}
 		}
+
+		var fields map[string]*apiservercel.DeclField
 		// an object will always be serialized at least as {}, so account for that
 		minSerializedSize := int64(2)
-		for name, prop := range s.Properties() {
-			var enumValues []interface{}
-			if prop.Enum() != nil {
-				enumValues = append(enumValues, prop.Enum()...)
-			}
-			if fieldType := SchemaDeclTypeWithMetadata(prop, prop.IsXEmbeddedResource()); fieldType != nil {
-				if propName, ok := apiservercel.Escape(name); ok {
-					fields[propName] = apiservercel.NewDeclField(propName, fieldType, required[name], enumValues, prop.Default())
+
+		// Fast path: bypass Properties() map allocation for *openapi.Schema.
+		// Properties() allocates a new map[string]common.Schema and wraps each
+		// property in a &Schema{Schema: &s} on every call.
+		if oSchema, ok := s.(*celopenapi.Schema); ok && oSchema.Schema != nil {
+			fields = make(map[string]*apiservercel.DeclField, len(oSchema.Schema.Properties))
+			for name, prop := range oSchema.Schema.Properties {
+				propCopy := prop
+				var enumValues []interface{}
+				if len(propCopy.Enum) > 0 {
+					enumValues = append(enumValues, propCopy.Enum...)
 				}
-				// the min serialized size for an object is 2 (for {}) plus the min size of all its required
-				// properties
-				// only include required properties without a default value; default values are filled in
-				// server-side
-				if required[name] && prop.Default() == nil {
-					minSerializedSize += int64(len(name)) + fieldType.MinSerializedSize + 4
+				propSchema := &celopenapi.Schema{Schema: &propCopy}
+				if fieldType := SchemaDeclTypeWithMetadata(propSchema, propSchema.IsXEmbeddedResource()); fieldType != nil {
+					if propName, ok := apiservercel.Escape(name); ok {
+						fields[propName] = apiservercel.NewDeclField(propName, fieldType, required[name], enumValues, propCopy.Default)
+					}
+					if required[name] && propCopy.Default == nil {
+						minSerializedSize += int64(len(name)) + fieldType.MinSerializedSize + 4
+					}
+				}
+			}
+		} else {
+			// Fallback: use interface methods for non-openapi Schema implementations
+			fields = make(map[string]*apiservercel.DeclField, len(s.Properties()))
+			for name, prop := range s.Properties() {
+				var enumValues []interface{}
+				if prop.Enum() != nil {
+					enumValues = append(enumValues, prop.Enum()...)
+				}
+				if fieldType := SchemaDeclTypeWithMetadata(prop, prop.IsXEmbeddedResource()); fieldType != nil {
+					if propName, ok := apiservercel.Escape(name); ok {
+						fields[propName] = apiservercel.NewDeclField(propName, fieldType, required[name], enumValues, prop.Default())
+					}
+					if required[name] && prop.Default() == nil {
+						minSerializedSize += int64(len(name)) + fieldType.MinSerializedSize + 4
+					}
 				}
 			}
 		}
