@@ -259,9 +259,12 @@ func (b *Builder) NewResourceGraphDefinition(originalCR *v1alpha1.ResourceGraphD
 		return nil, fmt.Errorf("failed to create typed CEL environment: %w", err)
 	}
 
+	// Expression cache avoids re-parsing identical CEL expressions within this build.
+	exprCache := newExpressionCache()
+
 	// Validate and compile all resource CEL expressions.
 	for id, node := range nodes {
-		if err := validateAndCompileNode(node, inspector, typedEnv, schemas[id], typeProvider); err != nil {
+		if err := validateAndCompileNode(node, inspector, typedEnv, schemas[id], typeProvider, exprCache); err != nil {
 			return nil, fmt.Errorf("failed to validate resource %q: %w", id, err)
 		}
 	}
@@ -275,6 +278,7 @@ func (b *Builder) NewResourceGraphDefinition(originalCR *v1alpha1.ResourceGraphD
 		inspector,
 		typedEnv,
 		typeProvider,
+		exprCache,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("failed to build instance status schema: %w", err)
@@ -730,6 +734,7 @@ func buildStatusSchema(
 	inspector *ast.Inspector,
 	env *cel.Env,
 	typeProvider *krocel.DeclTypeProvider,
+	cache *expressionCache,
 ) (
 	*extv1.JSONSchemaProps,
 	[]variable.FieldDescriptor,
@@ -779,7 +784,7 @@ func buildStatusSchema(
 			// Single standalone expression - use its output type
 			expression := fieldDescriptor.Expressions[0]
 
-			checkedAST, err := parseCheckAndCompile(env, expression)
+			checkedAST, err := parseCheckAndCompile(env, expression, cache)
 			if err != nil {
 				return nil, nil, nil, fmt.Errorf("failed to type-check status expression %q at path %q: %w", expression, fieldDescriptor.Path, err)
 			}
@@ -788,7 +793,7 @@ func buildStatusSchema(
 		} else {
 			// String interpolation - validate all expressions and result is string
 			for _, expression := range fieldDescriptor.Expressions {
-				checkedAST, err := parseCheckAndCompile(env, expression)
+				checkedAST, err := parseCheckAndCompile(env, expression, cache)
 				if err != nil {
 					return nil, nil, nil, fmt.Errorf("failed to type-check status expression %q at path %q: %w", expression, fieldDescriptor.Path, err)
 				}
@@ -1037,21 +1042,21 @@ func lookupSchemaAtField(schema *spec.Schema, field string) *spec.Schema {
 // - readyWhen expressions (resource readiness conditions)
 //
 // Uses the shared inspectorEnv for AST inspection and typed env for compilation.
-func validateAndCompileNode(node *Node, inspector *ast.Inspector, env *cel.Env, nodeSchema *spec.Schema, typeProvider *krocel.DeclTypeProvider) error {
+func validateAndCompileNode(node *Node, inspector *ast.Inspector, env *cel.Env, nodeSchema *spec.Schema, typeProvider *krocel.DeclTypeProvider, cache *expressionCache) error {
 	// Track iterator types for extending template environment
 	var iteratorTypes map[string]*cel.Type
 
 	// If this node has forEach iterators, validate and compile them
 	if len(node.ForEach) > 0 {
 		var err error
-		iteratorTypes, err = validateAndCompileForEach(env, node)
+		iteratorTypes, err = validateAndCompileForEach(env, node, cache)
 		if err != nil {
 			return err
 		}
 	}
 
 	// Validate and compile template expressions
-	if err := validateAndCompileTemplates(env, node, nodeSchema, typeProvider, iteratorTypes); err != nil {
+	if err := validateAndCompileTemplates(env, node, nodeSchema, typeProvider, iteratorTypes, cache); err != nil {
 		return err
 	}
 
@@ -1066,7 +1071,7 @@ func validateAndCompileNode(node *Node, inspector *ast.Inspector, env *cel.Env, 
 		}
 
 		// Compile includeWhen using the shared typed environment
-		if err := validateAndCompileIncludeWhen(env, node); err != nil {
+		if err := validateAndCompileIncludeWhen(env, node, cache); err != nil {
 			return err
 		}
 	}
@@ -1097,7 +1102,7 @@ func validateAndCompileNode(node *Node, inspector *ast.Inspector, env *cel.Env, 
 			}
 		}
 
-		if err := validateAndCompileReadyWhen(readyEnv, node); err != nil {
+		if err := validateAndCompileReadyWhen(readyEnv, node, cache); err != nil {
 			return err
 		}
 	}
@@ -1113,6 +1118,7 @@ func validateAndCompileTemplates(
 	nodeSchema *spec.Schema,
 	typeProvider *krocel.DeclTypeProvider,
 	iteratorTypes map[string]*cel.Type,
+	cache *expressionCache,
 ) error {
 	// If we have iterator types (from forEach), extend the environment with those declarations
 	compileEnv := env
@@ -1134,7 +1140,7 @@ func validateAndCompileTemplates(
 
 		for _, expression := range templateVariable.Expressions {
 			// Parse, type-check, and compile
-			checkedAST, err := parseCheckAndCompile(compileEnv, expression)
+			checkedAST, err := parseCheckAndCompile(compileEnv, expression, cache)
 			if err != nil {
 				return fmt.Errorf("failed to compile template expression %q at path %q: %w", expression.Original, templateVariable.Path, err)
 			}
@@ -1178,8 +1184,20 @@ func validateExpressionType(outputType, expectedType *cel.Type, expression, reso
 
 // parseCheckAndCompile parses, type-checks, and compiles a CEL expression.
 // On success, it sets expr.Program and returns the checked AST.
+// If cache is non-nil and contains a hit for expr.Original, Parse+Check are
+// skipped and only Program compilation is performed.
 // Callers should wrap errors with appropriate context.
-func parseCheckAndCompile(env *cel.Env, expr *krocel.Expression) (*cel.Ast, error) {
+func parseCheckAndCompile(env *cel.Env, expr *krocel.Expression, cache *expressionCache) (*cel.Ast, error) {
+	// Check cache for previously checked AST
+	if checkedAST, ok := cache.lookup(expr.Original); ok {
+		program, err := env.Program(checkedAST)
+		if err != nil {
+			return nil, fmt.Errorf("compile: %w", err)
+		}
+		expr.Program = program
+		return checkedAST, nil
+	}
+
 	parsedAST, issues := env.Parse(expr.Original)
 	if issues != nil && issues.Err() != nil {
 		return nil, issues.Err()
@@ -1189,6 +1207,8 @@ func parseCheckAndCompile(env *cel.Env, expr *krocel.Expression) (*cel.Ast, erro
 	if issues != nil && issues.Err() != nil {
 		return nil, issues.Err()
 	}
+
+	cache.store(expr.Original, checkedAST)
 
 	// Compile to a reusable Program
 	program, err := env.Program(checkedAST)
@@ -1202,8 +1222,8 @@ func parseCheckAndCompile(env *cel.Env, expr *krocel.Expression) (*cel.Ast, erro
 
 // validateConditionExpression validates a single condition expression (includeWhen or readyWhen).
 // It parses, type-checks, and verifies the expression returns bool or optional_type(bool).
-func validateConditionExpression(env *cel.Env, expr *krocel.Expression, conditionType, resourceID string) error {
-	checkedAST, err := parseCheckAndCompile(env, expr)
+func validateConditionExpression(env *cel.Env, expr *krocel.Expression, conditionType, resourceID string, cache *expressionCache) error {
+	checkedAST, err := parseCheckAndCompile(env, expr, cache)
 	if err != nil {
 		return fmt.Errorf("failed to type-check %s expression %q in resource %q: %w", conditionType, expr.Original, resourceID, err)
 	}
@@ -1222,9 +1242,9 @@ func validateConditionExpression(env *cel.Env, expr *krocel.Expression, conditio
 
 // validateAndCompileIncludeWhen validates and compiles includeWhen expressions.
 // These expressions must only reference the "schema" variable and return bool.
-func validateAndCompileIncludeWhen(env *cel.Env, node *Node) error {
+func validateAndCompileIncludeWhen(env *cel.Env, node *Node, cache *expressionCache) error {
 	for _, expression := range node.IncludeWhen {
-		if err := validateConditionExpression(env, expression, "includeWhen", node.Meta.ID); err != nil {
+		if err := validateConditionExpression(env, expression, "includeWhen", node.Meta.ID, cache); err != nil {
 			return err
 		}
 	}
@@ -1232,9 +1252,9 @@ func validateAndCompileIncludeWhen(env *cel.Env, node *Node) error {
 }
 
 // validateAndCompileReadyWhen validates and compiles readyWhen expressions for a single node.
-func validateAndCompileReadyWhen(env *cel.Env, node *Node) error {
+func validateAndCompileReadyWhen(env *cel.Env, node *Node, cache *expressionCache) error {
 	for _, expression := range node.ReadyWhen {
-		if err := validateConditionExpression(env, expression, "readyWhen", node.Meta.ID); err != nil {
+		if err := validateConditionExpression(env, expression, "readyWhen", node.Meta.ID, cache); err != nil {
 			return err
 		}
 	}
@@ -1250,7 +1270,7 @@ func validateAndCompileReadyWhen(env *cel.Env, node *Node) error {
 //
 // The inferred element type of each list is used to declare the iterator variable
 // in the CEL environment for validating template expressions.
-func validateAndCompileForEach(env *cel.Env, node *Node) (map[string]*cel.Type, error) {
+func validateAndCompileForEach(env *cel.Env, node *Node, cache *expressionCache) (map[string]*cel.Type, error) {
 	if len(node.ForEach) == 0 {
 		return nil, nil
 	}
@@ -1259,7 +1279,7 @@ func validateAndCompileForEach(env *cel.Env, node *Node) (map[string]*cel.Type, 
 
 	for _, iter := range node.ForEach {
 		// Parse, type-check, and compile the forEach expression
-		checkedAST, err := parseCheckAndCompile(env, iter.Expression)
+		checkedAST, err := parseCheckAndCompile(env, iter.Expression, cache)
 		if err != nil {
 			return nil, fmt.Errorf("node %q: forEach iterator %q: %w", node.Meta.ID, iter.Name, err)
 		}
