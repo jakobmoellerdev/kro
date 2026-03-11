@@ -34,6 +34,7 @@ import (
 	krov1alpha1 "github.com/kubernetes-sigs/kro/api/v1alpha1"
 	krocel "github.com/kubernetes-sigs/kro/pkg/cel"
 	"github.com/kubernetes-sigs/kro/pkg/cel/ast"
+	celcache "github.com/kubernetes-sigs/kro/pkg/cel/cache"
 	"github.com/kubernetes-sigs/kro/pkg/graph/fieldpath"
 	"github.com/kubernetes-sigs/kro/pkg/graph/variable"
 	"github.com/kubernetes-sigs/kro/pkg/testutil/generator"
@@ -249,7 +250,7 @@ func TestGraphBuilder_Validation(t *testing.T) {
 	builder := &Builder{
 		schemaResolver: fakeResolver,
 		restMapper:     restMapper,
-		celCache:       krocel.NewCompilationCache(),
+		celCache:       celcache.NewBuilderCache(),
 	}
 
 	tests := []struct {
@@ -844,7 +845,7 @@ func TestGraphBuilder_DependencyValidation(t *testing.T) {
 	builder := &Builder{
 		schemaResolver: fakeResolver,
 		restMapper:     restMapper,
-		celCache:       krocel.NewCompilationCache(),
+		celCache:       celcache.NewBuilderCache(),
 	}
 
 	tests := []struct {
@@ -1405,7 +1406,7 @@ func TestGraphBuilder_ExpressionParsing(t *testing.T) {
 	builder := &Builder{
 		schemaResolver: fakeResolver,
 		restMapper:     restMapper,
-		celCache:       krocel.NewCompilationCache(),
+		celCache:       celcache.NewBuilderCache(),
 	}
 
 	tests := []struct {
@@ -1763,7 +1764,7 @@ func TestGraphBuilder_CELTypeChecking(t *testing.T) {
 	builder := &Builder{
 		schemaResolver: fakeResolver,
 		restMapper:     restMapper,
-		celCache:       krocel.NewCompilationCache(),
+		celCache:       celcache.NewBuilderCache(),
 	}
 
 	tests := []struct {
@@ -2235,7 +2236,7 @@ func TestGraphBuilder_StructuralTypeCompatibility(t *testing.T) {
 	builder := &Builder{
 		schemaResolver: fakeResolver,
 		restMapper:     restMapper,
-		celCache:       krocel.NewCompilationCache(),
+		celCache:       celcache.NewBuilderCache(),
 	}
 
 	tests := []struct {
@@ -2579,7 +2580,7 @@ func TestGraphBuilder_ForEachParsing(t *testing.T) {
 	builder := &Builder{
 		schemaResolver: fakeResolver,
 		restMapper:     restMapper,
-		celCache:       krocel.NewCompilationCache(),
+		celCache:       celcache.NewBuilderCache(),
 	}
 
 	tests := []struct {
@@ -2983,7 +2984,7 @@ func TestGraphBuilder_CollectionChaining(t *testing.T) {
 	builder := &Builder{
 		schemaResolver: fakeResolver,
 		restMapper:     restMapper,
-		celCache:       krocel.NewCompilationCache(),
+		celCache:       celcache.NewBuilderCache(),
 	}
 
 	tests := []struct {
@@ -3205,7 +3206,7 @@ func TestGraphBuilder_CollectionValidation(t *testing.T) {
 	builder := &Builder{
 		schemaResolver: fakeResolver,
 		restMapper:     restMapper,
-		celCache:       krocel.NewCompilationCache(),
+		celCache:       celcache.NewBuilderCache(),
 	}
 
 	tests := []struct {
@@ -3506,8 +3507,8 @@ func newUnitInspector(t *testing.T, ids ...string) *ast.Inspector {
 
 func newTypedEnvWithProvider(t *testing.T, schemas map[string]*spec.Schema) (*cel.Env, *krocel.DeclTypeProvider) {
 	t.Helper()
-	cache := krocel.NewCompilationCache()
-	env, provider, err := cache.TypedEnvironmentWithProvider(schemas)
+	cache := celcache.NewBuilderCache()
+	env, provider, err := krocel.TypedEnvironmentWithProvider(cache, schemas)
 	require.NoError(t, err)
 	return env, provider
 }
@@ -3770,7 +3771,7 @@ func TestBuildStatusSchema(t *testing.T) {
 			"replicas": {SchemaProps: spec.SchemaProps{Type: []string{"integer"}}},
 		}),
 	})
-	cache := krocel.NewCompilationCache()
+	sessionCache := celcache.NewSessionCache()
 	env, provider := newTypedEnvWithProvider(t, map[string]*spec.Schema{"resource": resourceSchema})
 	inspector := newUnitInspector(t, "resource")
 	tests := []struct {
@@ -3789,7 +3790,7 @@ func TestBuildStatusSchema(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			statusSchema, fieldDescriptors, _, err := buildStatusSchema(cache, &krov1alpha1.Schema{
+			statusSchema, fieldDescriptors, _, err := buildStatusSchema(sessionCache, &krov1alpha1.Schema{
 				Status: rawExt(tt.statusRaw),
 			}, []string{"resource"}, inspector, env, provider)
 			if tt.wantErr != "" {
@@ -3901,9 +3902,10 @@ func TestBuilderHelperCases(t *testing.T) {
 			},
 		}),
 	})
-	cache := krocel.NewCompilationCache()
+	builderCache := celcache.NewBuilderCache()
+	sessionCache := celcache.NewSessionCache()
 	_, provider := newTypedEnvWithProvider(t, map[string]*spec.Schema{"resource": rootSchema})
-	resourceEnv, _, err := cache.TypedEnvironmentWithProvider(map[string]*spec.Schema{
+	resourceEnv, _, err := krocel.TypedEnvironmentWithProvider(builderCache, map[string]*spec.Schema{
 		SchemaVarName: rootSchema,
 		"resource":    rootSchema,
 	})
@@ -3934,11 +3936,11 @@ func TestBuilderHelperCases(t *testing.T) {
 		{
 			name: "getExpectedTypeForField falls back to dyn on bad paths",
 			run: func(t *testing.T) {
-				assert.Equal(t, cel.DynType, getExpectedTypeForField(cache, &variable.FieldDescriptor{
+				assert.Equal(t, cel.DynType, getExpectedTypeForField(builderCache, &variable.FieldDescriptor{
 					Path:                 "spec[",
 					StandaloneExpression: true,
 				}, rootSchema, "resource", provider))
-				assert.Equal(t, cel.DynType, getExpectedTypeForField(cache, &variable.FieldDescriptor{
+				assert.Equal(t, cel.DynType, getExpectedTypeForField(builderCache, &variable.FieldDescriptor{
 					Path:                 "spec.missing",
 					StandaloneExpression: true,
 				}, rootSchema, "resource", provider))
@@ -3947,8 +3949,8 @@ func TestBuilderHelperCases(t *testing.T) {
 		{
 			name: "getCelTypeFromSchema falls back to dyn for nil and empty schemas",
 			run: func(t *testing.T) {
-				assert.Equal(t, cel.DynType, getCelTypeFromSchema(cache, nil, "resource.Nil", nil))
-				assert.Equal(t, cel.DynType, getCelTypeFromSchema(cache, &spec.Schema{}, "resource.Empty", nil))
+				assert.Equal(t, cel.DynType, getCelTypeFromSchema(builderCache, nil, "resource.Nil", nil))
+				assert.Equal(t, cel.DynType, getCelTypeFromSchema(builderCache, &spec.Schema{}, "resource.Empty", nil))
 			},
 		},
 		{
@@ -3964,7 +3966,7 @@ func TestBuilderHelperCases(t *testing.T) {
 			run: func(t *testing.T) {
 				env, err := cel.NewEnv()
 				require.NoError(t, err)
-				_, err = parseCheckAndCompile(cache, env, expr("1 +"))
+				_, err = parseCheckAndCompile(sessionCache, env, expr("1 +"))
 				require.Error(t, err)
 			},
 		},
@@ -3973,7 +3975,7 @@ func TestBuilderHelperCases(t *testing.T) {
 			run: func(t *testing.T) {
 				env, err := cel.NewEnv()
 				require.NoError(t, err)
-				err = validateConditionExpression(cache, env, expr("1 +"), "includeWhen", "resource")
+				err = validateConditionExpression(sessionCache, env, expr("1 +"), "includeWhen", "resource")
 				require.Error(t, err)
 				assert.Contains(t, err.Error(), "failed to type-check includeWhen expression")
 			},
@@ -3981,11 +3983,11 @@ func TestBuilderHelperCases(t *testing.T) {
 		{
 			name: "validateAndCompileForEach handles empty and invalid expressions",
 			run: func(t *testing.T) {
-				iteratorTypes, err := validateAndCompileForEach(cache, plainEnv, &Node{})
+				iteratorTypes, err := validateAndCompileForEach(sessionCache, plainEnv, &Node{})
 				require.NoError(t, err)
 				assert.Nil(t, iteratorTypes)
 
-				_, err = validateAndCompileForEach(cache, plainEnv, &Node{
+				_, err = validateAndCompileForEach(sessionCache, plainEnv, &Node{
 					Meta: NodeMeta{ID: "resource"},
 					ForEach: []ForEachDimension{
 						{Name: "item", Expression: expr("items +")},
@@ -4002,7 +4004,7 @@ func TestBuilderHelperCases(t *testing.T) {
 					Meta:        NodeMeta{ID: "resource", Type: NodeTypeResource},
 					IncludeWhen: []*krocel.Expression{expr("resource.spec.name == 'x'")},
 				}
-				err := validateAndCompileNode(cache, node, newUnitInspector(t, "schema", "resource"), resourceEnv, rootSchema, provider)
+				err := validateAndCompileNode(builderCache, sessionCache, node, newUnitInspector(t, "schema", "resource"), resourceEnv, rootSchema, provider)
 				require.Error(t, err)
 				assert.Contains(t, err.Error(), "includeWhen")
 			},
