@@ -123,7 +123,14 @@ func (c *Controller) Reconcile(ctx context.Context, req ctrl.Request) (err error
 
 	start := time.Now()
 	defer func() {
-		watcher.Done(err == nil)
+		if doneErr := watcher.Done(err == nil); doneErr != nil {
+			c.log.Error(doneErr, "Failed to commit watches", "instance", req.NamespacedName)
+			// If reconcile succeeded but watch commit failed, surface the error
+			// so the instance gets requeued and watches are retried.
+			if err == nil {
+				err = doneErr
+			}
+		}
 		gvr := c.gvr.String()
 		instanceReconcileDurationSeconds.WithLabelValues(gvr).Observe(time.Since(start).Seconds())
 		instanceReconcileTotal.WithLabelValues(gvr).Inc()

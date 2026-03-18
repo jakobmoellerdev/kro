@@ -15,6 +15,7 @@
 package dynamiccontroller
 
 import (
+	"errors"
 	"sync"
 
 	"github.com/go-logr/logr"
@@ -33,14 +34,19 @@ type InstanceWatcher interface {
 	//
 	// For scalar resources: set Name + Namespace.
 	// For collections: set Selector + Namespace.
-	Watch(req WatchRequest) error
+	Watch(req WatchRequest)
 
 	// Done signals that all Watch() calls for this reconciliation cycle
 	// are complete. Any watch requests from the previous cycle that were
 	// NOT re-requested are automatically cleaned up. If commit is false, the
 	// current cycle is discarded and the previously committed watch set stays
 	// active.
-	Done(commit bool)
+	//
+	// The returned error, if non-nil, indicates that one or more informers
+	// failed to start (e.g. cache sync timeout). Routes and indexes are
+	// still committed regardless — the error just signals that informers
+	// may not be running.
+	Done(commit bool) error
 }
 
 // WatchRequest describes a resource the instance reconciler wants to watch.
@@ -52,10 +58,10 @@ type WatchRequest struct {
 	NodeID string
 	// GVR is the GroupVersionResource to watch.
 	GVR schema.GroupVersionResource
-	// Name is the specific resource name (scalar watches).
-	Name string
-	// Namespace is the resource namespace. Empty for cluster-scoped resources.
-	Namespace string
+	// NamespacedName identifies the target resource.
+	// For scalar watches: set both Name and Namespace.
+	// For collections: set only Namespace (Name is empty).
+	types.NamespacedName
 	// Selector is a label selector for collection watches. nil means scalar watch.
 	Selector labels.Selector
 }
@@ -78,10 +84,14 @@ type instanceKey struct {
 // watchIdentity identifies a watch by its content (GVR + target).
 // Used for diffing between reconciliation cycles instead of nodeID-based identity.
 type watchIdentity struct {
-	gvr       schema.GroupVersionResource
-	name      string
-	namespace string
-	selector  string // Selector.String() for collections, "" for scalar
+	gvr schema.GroupVersionResource
+	types.NamespacedName
+	// selector holds Selector.String() for collections, "" for scalar.
+	// This assumes Selector.String() is canonical: two selectors with identical
+	// matching behavior always produce the same string. This holds for
+	// labels.Parse / metav1.LabelSelectorAsSelector output, which sorts
+	// requirements deterministically.
+	selector string
 }
 
 func identityOf(r WatchRequest) watchIdentity {
@@ -89,14 +99,13 @@ func identityOf(r WatchRequest) watchIdentity {
 	if r.Selector != nil {
 		sel = r.Selector.String()
 	}
-	return watchIdentity{gvr: r.GVR, name: r.Name, namespace: r.Namespace, selector: sel}
+	return watchIdentity{gvr: r.GVR, NamespacedName: r.NamespacedName, selector: sel}
 }
 
 // scalarRouteKey identifies a specific scalar resource in the reverse index.
 type scalarRouteKey struct {
-	gvr       schema.GroupVersionResource
-	name      string
-	namespace string
+	gvr schema.GroupVersionResource
+	types.NamespacedName
 }
 
 // collectionRoute is a single collection watch in the reverse index.
@@ -130,18 +139,23 @@ type WatchCoordinator struct {
 
 	// Reference count per GVR across both indexes, for orphan detection.
 	gvrRefCount map[schema.GroupVersionResource]int
+
+	// parentGVRRefCount tracks the number of committed instances per parent GVR.
+	// Used for O(1) instance gauge management instead of scanning committed.
+	parentGVRRefCount map[schema.GroupVersionResource]int
 }
 
 // NewWatchCoordinator creates a new WatchCoordinator.
 func NewWatchCoordinator(watches *WatchManager, enqueue EnqueueFunc, log logr.Logger) *WatchCoordinator {
 	return &WatchCoordinator{
-		watches:          watches,
-		enqueue:          enqueue,
-		log:              log.WithName("watch-coordinator"),
-		committed:        make(map[instanceKey][]WatchRequest),
-		scalarRoutes:     make(map[scalarRouteKey]map[instanceKey]struct{}),
-		collectionRoutes: make(map[schema.GroupVersionResource][]collectionRoute),
-		gvrRefCount:      make(map[schema.GroupVersionResource]int),
+		watches:           watches,
+		enqueue:           enqueue,
+		log:               log.WithName("watch-coordinator"),
+		committed:         make(map[instanceKey][]WatchRequest),
+		scalarRoutes:      make(map[scalarRouteKey]map[instanceKey]struct{}),
+		collectionRoutes:  make(map[schema.GroupVersionResource][]collectionRoute),
+		gvrRefCount:       make(map[schema.GroupVersionResource]int),
+		parentGVRRefCount: make(map[schema.GroupVersionResource]int),
 	}
 }
 
@@ -157,7 +171,7 @@ func (c *WatchCoordinator) ForInstance(parentGVR schema.GroupVersionResource, in
 
 // commitWatches atomically updates the watch set for an instance by diffing
 // the new requests against the previously committed set.
-func (c *WatchCoordinator) commitWatches(key instanceKey, newReqs []WatchRequest) {
+func (c *WatchCoordinator) commitWatches(key instanceKey, newReqs []WatchRequest) error {
 	newReqs = dedupWatchRequests(newReqs)
 
 	c.mu.Lock()
@@ -167,7 +181,7 @@ func (c *WatchCoordinator) commitWatches(key instanceKey, newReqs []WatchRequest
 	// Nothing to do if there were no watches before and none now.
 	if !existed && len(newReqs) == 0 {
 		c.mu.Unlock()
-		return
+		return nil
 	}
 
 	// Build identity sets for diffing.
@@ -202,23 +216,26 @@ func (c *WatchCoordinator) commitWatches(key instanceKey, newReqs []WatchRequest
 	if len(newReqs) > 0 {
 		c.committed[key] = newReqs
 		if !existed {
+			c.parentGVRRefCount[key.parentGVR]++
 			instanceWatchCount.WithLabelValues(key.parentGVR.String()).Inc()
 		}
 	} else if existed {
 		delete(c.committed, key)
-		c.decInstanceWatchCount(key.parentGVR)
+		c.decParentGVRRefCount(key.parentGVR)
 	}
 
 	orphanedGVRs := c.findOrphanedGVRsLocked(removedGVRs)
 	c.mu.Unlock()
 
 	// Ensure informers for new GVRs (outside lock).
+	var ensureErrs []error
 	for gvr := range ensureGVRs {
 		if err := c.watches.EnsureWatch(gvr, "coordinator"); err != nil {
-			c.log.Error(err, "Failed to ensure watch", "gvr", gvr)
+			ensureErrs = append(ensureErrs, err)
 		}
 	}
 	c.stopWatches(orphanedGVRs)
+	return errors.Join(ensureErrs...)
 }
 
 // RemoveInstance removes all watch requests for a specific instance.
@@ -241,7 +258,7 @@ func (c *WatchCoordinator) RemoveInstance(parentGVR schema.GroupVersionResource,
 	}
 
 	delete(c.committed, key)
-	c.decInstanceWatchCount(parentGVR)
+	c.decParentGVRRefCount(parentGVR)
 
 	orphanedGVRs := c.findOrphanedGVRsLocked(affectedGVRs)
 	c.mu.Unlock()
@@ -268,8 +285,8 @@ func (c *WatchCoordinator) RemoveParentGVR(parentGVR schema.GroupVersionResource
 			affectedGVRs = append(affectedGVRs, req.GVR)
 		}
 		delete(c.committed, key)
+		c.decParentGVRRefCount(parentGVR)
 	}
-	c.decInstanceWatchCount(parentGVR)
 
 	orphanedGVRs := c.findOrphanedGVRsLocked(affectedGVRs)
 	c.mu.Unlock()
@@ -286,7 +303,7 @@ func (c *WatchCoordinator) RouteEvent(event Event) {
 	matched := make(map[instanceKey]struct{})
 
 	// Scalar matches (O(1) lookup).
-	rk := scalarRouteKey{gvr: event.GVR, name: event.Name, namespace: event.Namespace}
+	rk := scalarRouteKey{gvr: event.GVR, NamespacedName: event.NamespacedName}
 	for key := range c.scalarRoutes[rk] {
 		matched[key] = struct{}{}
 	}
@@ -333,7 +350,7 @@ func (c *WatchCoordinator) WatchRequestCount() (scalar, collection int) {
 	for _, entries := range c.collectionRoutes {
 		collection += len(entries)
 	}
-	return
+	return scalar, collection
 }
 
 // --- internal helpers ---
@@ -347,7 +364,7 @@ func (c *WatchCoordinator) addRouteLocked(key instanceKey, req WatchRequest) {
 		})
 		watchRequestCount.WithLabelValues(req.GVR.String(), "collection").Inc()
 	} else {
-		rk := scalarRouteKey{gvr: req.GVR, name: req.Name, namespace: req.Namespace}
+		rk := scalarRouteKey{gvr: req.GVR, NamespacedName: req.NamespacedName}
 		if c.scalarRoutes[rk] == nil {
 			c.scalarRoutes[rk] = make(map[instanceKey]struct{})
 		}
@@ -379,7 +396,7 @@ func (c *WatchCoordinator) removeRouteLocked(key instanceKey, req WatchRequest) 
 			c.collectionRoutes[req.GVR] = filtered
 		}
 	} else {
-		rk := scalarRouteKey{gvr: req.GVR, name: req.Name, namespace: req.Namespace}
+		rk := scalarRouteKey{gvr: req.GVR, NamespacedName: req.NamespacedName}
 		if keys := c.scalarRoutes[rk]; keys != nil {
 			delete(keys, key)
 			if len(keys) == 0 {
@@ -426,17 +443,18 @@ func (c *WatchCoordinator) stopWatches(gvrs []schema.GroupVersionResource) {
 	}
 }
 
-// decInstanceWatchCount decrements the instanceWatchCount gauge for the given
-// parent GVR, deleting the label set entirely when no instances remain.
-// Must be called with c.mu held, after the instance has been deleted.
-func (c *WatchCoordinator) decInstanceWatchCount(parentGVR schema.GroupVersionResource) {
-	for key := range c.committed {
-		if key.parentGVR == parentGVR {
-			instanceWatchCount.WithLabelValues(parentGVR.String()).Dec()
-			return
-		}
+// decParentGVRRefCount decrements the parentGVRRefCount for the given parent GVR
+// and updates the instanceWatchCount gauge accordingly. When the count reaches zero,
+// the gauge label set is deleted entirely to avoid stale metrics.
+// Must be called with c.mu held.
+func (c *WatchCoordinator) decParentGVRRefCount(parentGVR schema.GroupVersionResource) {
+	c.parentGVRRefCount[parentGVR]--
+	if c.parentGVRRefCount[parentGVR] <= 0 {
+		delete(c.parentGVRRefCount, parentGVR)
+		instanceWatchCount.DeleteLabelValues(parentGVR.String())
+	} else {
+		instanceWatchCount.WithLabelValues(parentGVR.String()).Dec()
 	}
-	instanceWatchCount.DeleteLabelValues(parentGVR.String())
 }
 
 // dedupWatchRequests removes duplicate watch requests by content identity.
@@ -461,8 +479,8 @@ func dedupWatchRequests(reqs []WatchRequest) []WatchRequest {
 // in tests or when no coordinator is available.
 type NoopInstanceWatcher struct{}
 
-func (NoopInstanceWatcher) Watch(_ WatchRequest) error { return nil }
-func (NoopInstanceWatcher) Done(bool)                  {}
+func (NoopInstanceWatcher) Watch(_ WatchRequest) {}
+func (NoopInstanceWatcher) Done(bool) error      { return nil }
 
 // instanceWatcher is the concrete implementation of InstanceWatcher.
 // Watch() calls append to a local pending slice with no coordinator
@@ -479,18 +497,17 @@ type instanceWatcher struct {
 
 // Watch appends a watch request to the local pending set.
 // No locks are acquired and the call never fails.
-func (w *instanceWatcher) Watch(req WatchRequest) error {
+func (w *instanceWatcher) Watch(req WatchRequest) {
 	w.pending = append(w.pending, req)
-	return nil
 }
 
 // Done finalizes the current reconciliation cycle. If commit is true, the
 // pending watch set replaces the previously committed set and indexes are
 // updated atomically. If commit is false, the pending set is discarded and
 // the previously committed watches remain active.
-func (w *instanceWatcher) Done(commit bool) {
+func (w *instanceWatcher) Done(commit bool) error {
 	if !commit {
-		return
+		return nil
 	}
-	w.coordinator.commitWatches(w.key, w.pending)
+	return w.coordinator.commitWatches(w.key, w.pending)
 }

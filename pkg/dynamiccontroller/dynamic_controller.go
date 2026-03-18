@@ -419,10 +419,12 @@ func (dc *DynamicController) enqueueFromInformer(parentGVR schema.GroupVersionRe
 		return
 	}
 	dc.enqueueParent(parentGVR, Event{
-		Type:      eventType,
-		GVR:       parentGVR,
-		Name:      mobj.GetName(),
-		Namespace: mobj.GetNamespace(),
+		Type: eventType,
+		GVR:  parentGVR,
+		NamespacedName: types.NamespacedName{
+			Name:      mobj.GetName(),
+			Namespace: mobj.GetNamespace(),
+		},
 	})
 }
 

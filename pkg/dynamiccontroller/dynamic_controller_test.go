@@ -177,10 +177,12 @@ func TestEnqueueObject(t *testing.T) {
 	parentGVR := schema.GroupVersionResource{Group: "group", Version: "version", Resource: "resource"}
 
 	dc.enqueueParent(parentGVR, Event{
-		Type:      EventAdd,
-		GVR:       parentGVR,
-		Name:      "test-object",
-		Namespace: "default",
+		Type: EventAdd,
+		GVR:  parentGVR,
+		NamespacedName: types.NamespacedName{
+			Name:      "test-object",
+			Namespace: "default",
+		},
 	})
 
 	assert.Equal(t, 1, dc.queue.Len())
@@ -206,13 +208,15 @@ func TestChildCleanup_DoesNotStopParentInformer(t *testing.T) {
 
 	instance := types.NamespacedName{Name: "consumer", Namespace: "default"}
 	watcher := dc.coordinator.ForInstance(consumerParentGVR, instance)
-	require.NoError(t, watcher.Watch(WatchRequest{
-		NodeID:    "external",
-		GVR:       parentGVR,
-		Name:      "target",
-		Namespace: "default",
-	}))
-	watcher.Done(true)
+	watcher.Watch(WatchRequest{
+		NodeID: "external",
+		GVR:    parentGVR,
+		NamespacedName: types.NamespacedName{
+			Name:      "target",
+			Namespace: "default",
+		},
+	})
+	require.NoError(t, watcher.Done(true))
 
 	dc.coordinator.RemoveInstance(consumerParentGVR, instance)
 	assert.NotNil(t, dc.watches.GetInformer(parentGVR), "child cleanup must not stop a registered parent informer")
@@ -240,13 +244,15 @@ func TestDeregister_KeepsInformerWhileChildWatchRemains(t *testing.T) {
 
 	instance := types.NamespacedName{Name: "consumer", Namespace: "default"}
 	watcher := dc.coordinator.ForInstance(consumerParentGVR, instance)
-	require.NoError(t, watcher.Watch(WatchRequest{
-		NodeID:    "external",
-		GVR:       parentGVR,
-		Name:      "target",
-		Namespace: "default",
-	}))
-	watcher.Done(true)
+	watcher.Watch(WatchRequest{
+		NodeID: "external",
+		GVR:    parentGVR,
+		NamespacedName: types.NamespacedName{
+			Name:      "target",
+			Namespace: "default",
+		},
+	})
+	require.NoError(t, watcher.Done(true))
 
 	require.NoError(t, dc.Deregister(ctx, parentGVR))
 	assert.NotNil(t, dc.watches.GetInformer(parentGVR), "child watch should keep informer alive after parent deregister")

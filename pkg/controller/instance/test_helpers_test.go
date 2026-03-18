@@ -16,7 +16,6 @@ package instance
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"strconv"
 	"sync/atomic"
@@ -403,5 +402,5 @@ func getStoredParentObject(t *testing.T, client *dynamicfake.FakeDynamicClient) 
 
 type erroringWatcher struct{}
 
-func (erroringWatcher) Watch(dynamiccontroller.WatchRequest) error { return errors.New("watch failed") }
-func (erroringWatcher) Done(bool)                                  {}
+func (erroringWatcher) Watch(dynamiccontroller.WatchRequest) {}
+func (erroringWatcher) Done(bool) error                      { return nil }

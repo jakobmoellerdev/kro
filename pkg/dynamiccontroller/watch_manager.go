@@ -25,6 +25,7 @@ import (
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/metadata"
 	"k8s.io/client-go/metadata/metadatainformer"
 	"k8s.io/client-go/tools/cache"
@@ -246,11 +247,13 @@ func (w *gvrWatch) eventHandlerFuncs(onEvent EventHandler) cache.ResourceEventHa
 			return nil
 		}
 		return &Event{
-			Type:      eventType,
-			GVR:       w.gvr,
-			Name:      mobj.GetName(),
-			Namespace: mobj.GetNamespace(),
-			Labels:    maps.Clone(mobj.GetLabels()),
+			Type: eventType,
+			GVR:  w.gvr,
+			NamespacedName: types.NamespacedName{
+				Name:      mobj.GetName(),
+				Namespace: mobj.GetNamespace(),
+			},
+			Labels: maps.Clone(mobj.GetLabels()),
 		}
 	}
 

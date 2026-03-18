@@ -33,14 +33,13 @@ type mockWatcher struct {
 	requests []dynamiccontroller.WatchRequest
 }
 
-func (m *mockWatcher) Watch(req dynamiccontroller.WatchRequest) error {
+func (m *mockWatcher) Watch(req dynamiccontroller.WatchRequest) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.requests = append(m.requests, req)
-	return nil
 }
 
-func (m *mockWatcher) Done(bool) {}
+func (m *mockWatcher) Done(bool) error { return nil }
 
 func (m *mockWatcher) getRequests() []dynamiccontroller.WatchRequest {
 	m.mu.Lock()

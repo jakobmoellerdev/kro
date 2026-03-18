@@ -110,33 +110,29 @@ func TestWatchAndDone_ScalarWatch(t *testing.T) {
 	watcher := coord.ForInstance(testParentGVR, instance)
 
 	// Watch a deployment and commit.
-	err := watcher.Watch(WatchRequest{
-		NodeID:    "deployment",
-		GVR:       testDeployGVR,
-		Name:      "my-deploy",
-		Namespace: "default",
+	watcher.Watch(WatchRequest{
+		NodeID:         "deployment",
+		GVR:            testDeployGVR,
+		NamespacedName: types.NamespacedName{Name: "my-deploy", Namespace: "default"},
 	})
-	require.NoError(t, err)
-	watcher.Done(true)
+	_ = watcher.Done(true)
 
 	// Verify instance is tracked.
 	assert.Equal(t, 1, coord.InstanceWatchCount())
 
 	// Simulate an event matching the scalar watch.
 	coord.RouteEvent(Event{
-		Type:      EventUpdate,
-		GVR:       testDeployGVR,
-		Name:      "my-deploy",
-		Namespace: "default",
+		Type:           EventUpdate,
+		GVR:            testDeployGVR,
+		NamespacedName: types.NamespacedName{Name: "my-deploy", Namespace: "default"},
 	})
 	assert.Equal(t, 1, recorder.count())
 
 	// Non-matching event.
 	coord.RouteEvent(Event{
-		Type:      EventUpdate,
-		GVR:       testDeployGVR,
-		Name:      "other-deploy",
-		Namespace: "default",
+		Type:           EventUpdate,
+		GVR:            testDeployGVR,
+		NamespacedName: types.NamespacedName{Name: "other-deploy", Namespace: "default"},
 	})
 	assert.Equal(t, 1, recorder.count())
 }
@@ -147,27 +143,27 @@ func TestWatchAndDone_CleanupStaleRequests(t *testing.T) {
 
 	// Cycle 1: watch deployment + service.
 	w1 := coord.ForInstance(testParentGVR, instance)
-	require.NoError(t, w1.Watch(WatchRequest{NodeID: "deployment", GVR: testDeployGVR, Name: "d1", Namespace: "default"}))
-	require.NoError(t, w1.Watch(WatchRequest{NodeID: "service", GVR: testServiceGVR, Name: "s1", Namespace: "default"}))
-	w1.Done(true)
+	w1.Watch(WatchRequest{NodeID: "deployment", GVR: testDeployGVR, NamespacedName: types.NamespacedName{Name: "d1", Namespace: "default"}})
+	w1.Watch(WatchRequest{NodeID: "service", GVR: testServiceGVR, NamespacedName: types.NamespacedName{Name: "s1", Namespace: "default"}})
+	_ = w1.Done(true)
 
 	// Verify both match.
-	coord.RouteEvent(Event{Type: EventUpdate, GVR: testDeployGVR, Name: "d1", Namespace: "default"})
-	coord.RouteEvent(Event{Type: EventUpdate, GVR: testServiceGVR, Name: "s1", Namespace: "default"})
+	coord.RouteEvent(Event{Type: EventUpdate, GVR: testDeployGVR, NamespacedName: types.NamespacedName{Name: "d1", Namespace: "default"}})
+	coord.RouteEvent(Event{Type: EventUpdate, GVR: testServiceGVR, NamespacedName: types.NamespacedName{Name: "s1", Namespace: "default"}})
 	assert.Equal(t, 2, recorder.count())
 	recorder.reset()
 
 	// Cycle 2: only watch deployment (service removed).
 	w2 := coord.ForInstance(testParentGVR, instance)
-	require.NoError(t, w2.Watch(WatchRequest{NodeID: "deployment", GVR: testDeployGVR, Name: "d1", Namespace: "default"}))
-	w2.Done(true)
+	w2.Watch(WatchRequest{NodeID: "deployment", GVR: testDeployGVR, NamespacedName: types.NamespacedName{Name: "d1", Namespace: "default"}})
+	_ = w2.Done(true)
 
 	// Deployment still matches, service no longer does.
-	coord.RouteEvent(Event{Type: EventUpdate, GVR: testDeployGVR, Name: "d1", Namespace: "default"})
+	coord.RouteEvent(Event{Type: EventUpdate, GVR: testDeployGVR, NamespacedName: types.NamespacedName{Name: "d1", Namespace: "default"}})
 	assert.Equal(t, 1, recorder.count())
 	recorder.reset()
 
-	coord.RouteEvent(Event{Type: EventUpdate, GVR: testServiceGVR, Name: "s1", Namespace: "default"})
+	coord.RouteEvent(Event{Type: EventUpdate, GVR: testServiceGVR, NamespacedName: types.NamespacedName{Name: "s1", Namespace: "default"}})
 	assert.Equal(t, 0, recorder.count())
 }
 
@@ -177,41 +173,38 @@ func TestCollectionWatch(t *testing.T) {
 
 	watcher := coord.ForInstance(testParentGVR, instance)
 	selector, _ := labels.Parse("app=my-app")
-	require.NoError(t, watcher.Watch(WatchRequest{
-		NodeID:    "configs",
-		GVR:       testCmGVR,
-		Namespace: "default",
-		Selector:  selector,
-	}))
-	watcher.Done(true)
+	watcher.Watch(WatchRequest{
+		NodeID:         "configs",
+		GVR:            testCmGVR,
+		NamespacedName: types.NamespacedName{Namespace: "default"},
+		Selector:       selector,
+	})
+	_ = watcher.Done(true)
 
 	// Matching labels.
 	coord.RouteEvent(Event{
-		Type:      EventAdd,
-		GVR:       testCmGVR,
-		Name:      "config-1",
-		Namespace: "default",
-		Labels:    map[string]string{"app": "my-app"},
+		Type:           EventAdd,
+		GVR:            testCmGVR,
+		NamespacedName: types.NamespacedName{Name: "config-1", Namespace: "default"},
+		Labels:         map[string]string{"app": "my-app"},
 	})
 	assert.Equal(t, 1, recorder.count())
 
 	// Non-matching labels.
 	coord.RouteEvent(Event{
-		Type:      EventAdd,
-		GVR:       testCmGVR,
-		Name:      "config-2",
-		Namespace: "default",
-		Labels:    map[string]string{"app": "other"},
+		Type:           EventAdd,
+		GVR:            testCmGVR,
+		NamespacedName: types.NamespacedName{Name: "config-2", Namespace: "default"},
+		Labels:         map[string]string{"app": "other"},
 	})
 	assert.Equal(t, 1, recorder.count())
 
 	// Wrong namespace.
 	coord.RouteEvent(Event{
-		Type:      EventAdd,
-		GVR:       testCmGVR,
-		Name:      "config-3",
-		Namespace: "other-ns",
-		Labels:    map[string]string{"app": "my-app"},
+		Type:           EventAdd,
+		GVR:            testCmGVR,
+		NamespacedName: types.NamespacedName{Name: "config-3", Namespace: "other-ns"},
+		Labels:         map[string]string{"app": "my-app"},
 	})
 	assert.Equal(t, 1, recorder.count())
 }
@@ -221,11 +214,11 @@ func TestRemoveInstance(t *testing.T) {
 	instance := types.NamespacedName{Name: "my-app", Namespace: "default"}
 
 	watcher := coord.ForInstance(testParentGVR, instance)
-	require.NoError(t, watcher.Watch(WatchRequest{NodeID: "deployment", GVR: testDeployGVR, Name: "d1", Namespace: "default"}))
-	watcher.Done(true)
+	watcher.Watch(WatchRequest{NodeID: "deployment", GVR: testDeployGVR, NamespacedName: types.NamespacedName{Name: "d1", Namespace: "default"}})
+	_ = watcher.Done(true)
 
 	// Verify match.
-	coord.RouteEvent(Event{Type: EventUpdate, GVR: testDeployGVR, Name: "d1", Namespace: "default"})
+	coord.RouteEvent(Event{Type: EventUpdate, GVR: testDeployGVR, NamespacedName: types.NamespacedName{Name: "d1", Namespace: "default"}})
 	assert.Equal(t, 1, recorder.count())
 	recorder.reset()
 
@@ -234,7 +227,7 @@ func TestRemoveInstance(t *testing.T) {
 	assert.Equal(t, 0, coord.InstanceWatchCount())
 
 	// No longer matches.
-	coord.RouteEvent(Event{Type: EventUpdate, GVR: testDeployGVR, Name: "d1", Namespace: "default"})
+	coord.RouteEvent(Event{Type: EventUpdate, GVR: testDeployGVR, NamespacedName: types.NamespacedName{Name: "d1", Namespace: "default"}})
 	assert.Equal(t, 0, recorder.count())
 }
 
@@ -245,12 +238,12 @@ func TestRemoveParentGVR(t *testing.T) {
 
 	// Two instances watching deployments.
 	w1 := coord.ForInstance(testParentGVR, inst1)
-	require.NoError(t, w1.Watch(WatchRequest{NodeID: "deployment", GVR: testDeployGVR, Name: "d1", Namespace: "default"}))
-	w1.Done(true)
+	w1.Watch(WatchRequest{NodeID: "deployment", GVR: testDeployGVR, NamespacedName: types.NamespacedName{Name: "d1", Namespace: "default"}})
+	_ = w1.Done(true)
 
 	w2 := coord.ForInstance(testParentGVR, inst2)
-	require.NoError(t, w2.Watch(WatchRequest{NodeID: "deployment", GVR: testDeployGVR, Name: "d2", Namespace: "default"}))
-	w2.Done(true)
+	w2.Watch(WatchRequest{NodeID: "deployment", GVR: testDeployGVR, NamespacedName: types.NamespacedName{Name: "d2", Namespace: "default"}})
+	_ = w2.Done(true)
 
 	assert.Equal(t, 2, coord.InstanceWatchCount())
 
@@ -259,8 +252,8 @@ func TestRemoveParentGVR(t *testing.T) {
 	assert.Equal(t, 0, coord.InstanceWatchCount())
 
 	// No more matches.
-	coord.RouteEvent(Event{Type: EventUpdate, GVR: testDeployGVR, Name: "d1", Namespace: "default"})
-	coord.RouteEvent(Event{Type: EventUpdate, GVR: testDeployGVR, Name: "d2", Namespace: "default"})
+	coord.RouteEvent(Event{Type: EventUpdate, GVR: testDeployGVR, NamespacedName: types.NamespacedName{Name: "d1", Namespace: "default"}})
+	coord.RouteEvent(Event{Type: EventUpdate, GVR: testDeployGVR, NamespacedName: types.NamespacedName{Name: "d2", Namespace: "default"}})
 	assert.Equal(t, 0, recorder.count())
 }
 
@@ -271,15 +264,15 @@ func TestSharedWatchAcrossInstances(t *testing.T) {
 
 	// Both instances watch the same shared configmap.
 	w1 := coord.ForInstance(testParentGVR, inst1)
-	require.NoError(t, w1.Watch(WatchRequest{NodeID: "config", GVR: testCmGVR, Name: "shared-cm", Namespace: "default"}))
-	w1.Done(true)
+	w1.Watch(WatchRequest{NodeID: "config", GVR: testCmGVR, NamespacedName: types.NamespacedName{Name: "shared-cm", Namespace: "default"}})
+	_ = w1.Done(true)
 
 	w2 := coord.ForInstance(testParentGVR, inst2)
-	require.NoError(t, w2.Watch(WatchRequest{NodeID: "config", GVR: testCmGVR, Name: "shared-cm", Namespace: "default"}))
-	w2.Done(true)
+	w2.Watch(WatchRequest{NodeID: "config", GVR: testCmGVR, NamespacedName: types.NamespacedName{Name: "shared-cm", Namespace: "default"}})
+	_ = w2.Done(true)
 
 	// One event should trigger BOTH instances.
-	coord.RouteEvent(Event{Type: EventUpdate, GVR: testCmGVR, Name: "shared-cm", Namespace: "default"})
+	coord.RouteEvent(Event{Type: EventUpdate, GVR: testCmGVR, NamespacedName: types.NamespacedName{Name: "shared-cm", Namespace: "default"}})
 	assert.Equal(t, 2, recorder.count())
 }
 
@@ -288,8 +281,8 @@ func TestStopOrphanedWatch_RemoveInstance(t *testing.T) {
 	instance := types.NamespacedName{Name: "my-app", Namespace: "default"}
 
 	watcher := coord.ForInstance(testParentGVR, instance)
-	require.NoError(t, watcher.Watch(WatchRequest{NodeID: "deployment", GVR: testDeployGVR, Name: "d1", Namespace: "default"}))
-	watcher.Done(true)
+	watcher.Watch(WatchRequest{NodeID: "deployment", GVR: testDeployGVR, NamespacedName: types.NamespacedName{Name: "d1", Namespace: "default"}})
+	_ = watcher.Done(true)
 
 	// Informer should be running.
 	assert.Equal(t, 1, coord.watches.ActiveWatchCount(), "expected 1 active watch for deployment GVR")
@@ -309,16 +302,16 @@ func TestStopOrphanedWatch_DoneCleanup(t *testing.T) {
 
 	// Cycle 1: watch deployment + service.
 	w1 := coord.ForInstance(testParentGVR, instance)
-	require.NoError(t, w1.Watch(WatchRequest{NodeID: "deployment", GVR: testDeployGVR, Name: "d1", Namespace: "default"}))
-	require.NoError(t, w1.Watch(WatchRequest{NodeID: "service", GVR: testServiceGVR, Name: "s1", Namespace: "default"}))
-	w1.Done(true)
+	w1.Watch(WatchRequest{NodeID: "deployment", GVR: testDeployGVR, NamespacedName: types.NamespacedName{Name: "d1", Namespace: "default"}})
+	w1.Watch(WatchRequest{NodeID: "service", GVR: testServiceGVR, NamespacedName: types.NamespacedName{Name: "s1", Namespace: "default"}})
+	_ = w1.Done(true)
 
 	assert.Equal(t, 2, coord.watches.ActiveWatchCount(), "expected 2 active watches after cycle 1")
 
 	// Cycle 2: only watch deployment — service should be cleaned up.
 	w2 := coord.ForInstance(testParentGVR, instance)
-	require.NoError(t, w2.Watch(WatchRequest{NodeID: "deployment", GVR: testDeployGVR, Name: "d1", Namespace: "default"}))
-	w2.Done(true)
+	w2.Watch(WatchRequest{NodeID: "deployment", GVR: testDeployGVR, NamespacedName: types.NamespacedName{Name: "d1", Namespace: "default"}})
+	_ = w2.Done(true)
 
 	assert.Equal(t, 1, coord.watches.ActiveWatchCount(), "expected service watch to be stopped after cycle 2")
 
@@ -333,12 +326,12 @@ func TestStopOrphanedWatch_RemoveParentGVR(t *testing.T) {
 	inst2 := types.NamespacedName{Name: "app2", Namespace: "default"}
 
 	w1 := coord.ForInstance(testParentGVR, inst1)
-	require.NoError(t, w1.Watch(WatchRequest{NodeID: "deployment", GVR: testDeployGVR, Name: "d1", Namespace: "default"}))
-	w1.Done(true)
+	w1.Watch(WatchRequest{NodeID: "deployment", GVR: testDeployGVR, NamespacedName: types.NamespacedName{Name: "d1", Namespace: "default"}})
+	_ = w1.Done(true)
 
 	w2 := coord.ForInstance(testParentGVR, inst2)
-	require.NoError(t, w2.Watch(WatchRequest{NodeID: "deployment", GVR: testDeployGVR, Name: "d2", Namespace: "default"}))
-	w2.Done(true)
+	w2.Watch(WatchRequest{NodeID: "deployment", GVR: testDeployGVR, NamespacedName: types.NamespacedName{Name: "d2", Namespace: "default"}})
+	_ = w2.Done(true)
 
 	assert.Equal(t, 1, coord.watches.ActiveWatchCount(), "expected 1 active watch (shared deployment GVR)")
 
@@ -355,13 +348,13 @@ func TestStopOrphanedWatch_SharedGVRNotStopped(t *testing.T) {
 
 	// Instance 1 (parent1) watches deployments.
 	w1 := coord.ForInstance(testParentGVR, inst1)
-	require.NoError(t, w1.Watch(WatchRequest{NodeID: "deployment", GVR: testDeployGVR, Name: "d1", Namespace: "default"}))
-	w1.Done(true)
+	w1.Watch(WatchRequest{NodeID: "deployment", GVR: testDeployGVR, NamespacedName: types.NamespacedName{Name: "d1", Namespace: "default"}})
+	_ = w1.Done(true)
 
 	// Instance 2 (parent2) also watches deployments.
 	w2 := coord.ForInstance(parentGVR2, inst2)
-	require.NoError(t, w2.Watch(WatchRequest{NodeID: "deployment", GVR: testDeployGVR, Name: "d2", Namespace: "default"}))
-	w2.Done(true)
+	w2.Watch(WatchRequest{NodeID: "deployment", GVR: testDeployGVR, NamespacedName: types.NamespacedName{Name: "d2", Namespace: "default"}})
+	_ = w2.Done(true)
 
 	assert.Equal(t, 1, coord.watches.ActiveWatchCount(), "expected 1 shared deployment watch")
 
@@ -380,13 +373,13 @@ func TestStopOrphanedWatch_CollectionWatch(t *testing.T) {
 
 	watcher := coord.ForInstance(testParentGVR, instance)
 	selector, _ := labels.Parse("app=my-app")
-	require.NoError(t, watcher.Watch(WatchRequest{
-		NodeID:    "configs",
-		GVR:       testCmGVR,
-		Namespace: "default",
-		Selector:  selector,
-	}))
-	watcher.Done(true)
+	watcher.Watch(WatchRequest{
+		NodeID:         "configs",
+		GVR:            testCmGVR,
+		NamespacedName: types.NamespacedName{Namespace: "default"},
+		Selector:       selector,
+	})
+	_ = watcher.Done(true)
 
 	assert.Equal(t, 1, coord.watches.ActiveWatchCount(), "expected 1 active watch for collection GVR")
 
@@ -402,31 +395,29 @@ func TestCollectionWatch_DoneCleanup(t *testing.T) {
 	// Cycle 1: collection watch on configmaps + scalar watch on deployments.
 	w1 := coord.ForInstance(testParentGVR, instance)
 	selector, _ := labels.Parse("app=my-app")
-	require.NoError(t, w1.Watch(WatchRequest{
-		NodeID:    "configs",
-		GVR:       testCmGVR,
-		Namespace: "default",
-		Selector:  selector,
-	}))
-	require.NoError(t, w1.Watch(WatchRequest{
-		NodeID:    "deployment",
-		GVR:       testDeployGVR,
-		Name:      "d1",
-		Namespace: "default",
-	}))
-	w1.Done(true)
+	w1.Watch(WatchRequest{
+		NodeID:         "configs",
+		GVR:            testCmGVR,
+		NamespacedName: types.NamespacedName{Namespace: "default"},
+		Selector:       selector,
+	})
+	w1.Watch(WatchRequest{
+		NodeID:         "deployment",
+		GVR:            testDeployGVR,
+		NamespacedName: types.NamespacedName{Name: "d1", Namespace: "default"},
+	})
+	_ = w1.Done(true)
 
 	assert.Equal(t, 2, coord.watches.ActiveWatchCount(), "expected 2 active watches after cycle 1")
 
 	// Cycle 2: only scalar watch on deployments — collection watch should be cleaned up.
 	w2 := coord.ForInstance(testParentGVR, instance)
-	require.NoError(t, w2.Watch(WatchRequest{
-		NodeID:    "deployment",
-		GVR:       testDeployGVR,
-		Name:      "d1",
-		Namespace: "default",
-	}))
-	w2.Done(true)
+	w2.Watch(WatchRequest{
+		NodeID:         "deployment",
+		GVR:            testDeployGVR,
+		NamespacedName: types.NamespacedName{Name: "d1", Namespace: "default"},
+	})
+	_ = w2.Done(true)
 
 	assert.Nil(t, coord.watches.GetInformer(testCmGVR), "collection configmap informer should have been stopped")
 	assert.NotNil(t, coord.watches.GetInformer(testDeployGVR), "deployment informer should still be running")
@@ -438,25 +429,23 @@ func TestNodeIDReuse_ChangesTargetGVR(t *testing.T) {
 
 	// Cycle 1: nodeID "resource" → testDeployGVR.
 	w1 := coord.ForInstance(testParentGVR, instance)
-	require.NoError(t, w1.Watch(WatchRequest{
-		NodeID:    "resource",
-		GVR:       testDeployGVR,
-		Name:      "d1",
-		Namespace: "default",
-	}))
-	w1.Done(true)
+	w1.Watch(WatchRequest{
+		NodeID:         "resource",
+		GVR:            testDeployGVR,
+		NamespacedName: types.NamespacedName{Name: "d1", Namespace: "default"},
+	})
+	_ = w1.Done(true)
 
 	assert.NotNil(t, coord.watches.GetInformer(testDeployGVR), "deployment informer should be running after cycle 1")
 
 	// Cycle 2: same nodeID "resource" → testServiceGVR (different GVR).
 	w2 := coord.ForInstance(testParentGVR, instance)
-	require.NoError(t, w2.Watch(WatchRequest{
-		NodeID:    "resource",
-		GVR:       testServiceGVR,
-		Name:      "s1",
-		Namespace: "default",
-	}))
-	w2.Done(true)
+	w2.Watch(WatchRequest{
+		NodeID:         "resource",
+		GVR:            testServiceGVR,
+		NamespacedName: types.NamespacedName{Name: "s1", Namespace: "default"},
+	})
+	_ = w2.Done(true)
 
 	assert.Nil(t, coord.watches.GetInformer(testDeployGVR), "old deployment informer should be stopped after nodeID reuse")
 	assert.NotNil(t, coord.watches.GetInformer(testServiceGVR), "new service informer should be running")
@@ -469,24 +458,23 @@ func TestMixedScalarAndCollection_RemoveParentGVR(t *testing.T) {
 
 	// Instance 1: scalar watch on deployments.
 	w1 := coord.ForInstance(testParentGVR, inst1)
-	require.NoError(t, w1.Watch(WatchRequest{
-		NodeID:    "deployment",
-		GVR:       testDeployGVR,
-		Name:      "d1",
-		Namespace: "default",
-	}))
-	w1.Done(true)
+	w1.Watch(WatchRequest{
+		NodeID:         "deployment",
+		GVR:            testDeployGVR,
+		NamespacedName: types.NamespacedName{Name: "d1", Namespace: "default"},
+	})
+	_ = w1.Done(true)
 
 	// Instance 2: collection watch on configmaps.
 	w2 := coord.ForInstance(testParentGVR, inst2)
 	selector, _ := labels.Parse("app=my-app")
-	require.NoError(t, w2.Watch(WatchRequest{
-		NodeID:    "configs",
-		GVR:       testCmGVR,
-		Namespace: "default",
-		Selector:  selector,
-	}))
-	w2.Done(true)
+	w2.Watch(WatchRequest{
+		NodeID:         "configs",
+		GVR:            testCmGVR,
+		NamespacedName: types.NamespacedName{Namespace: "default"},
+		Selector:       selector,
+	})
+	_ = w2.Done(true)
 
 	assert.Equal(t, 2, coord.watches.ActiveWatchCount(), "expected 2 active watches (deployment + configmap)")
 
@@ -503,19 +491,19 @@ func TestDuplicateCollectionRegistration_Idempotent(t *testing.T) {
 
 	// Register the same collection watch twice in the same cycle.
 	watcher := coord.ForInstance(testParentGVR, instance)
-	require.NoError(t, watcher.Watch(WatchRequest{
-		NodeID:    "configs",
-		GVR:       testCmGVR,
-		Namespace: "default",
-		Selector:  selector,
-	}))
-	require.NoError(t, watcher.Watch(WatchRequest{
-		NodeID:    "configs",
-		GVR:       testCmGVR,
-		Namespace: "default",
-		Selector:  selector,
-	}))
-	watcher.Done(true)
+	watcher.Watch(WatchRequest{
+		NodeID:         "configs",
+		GVR:            testCmGVR,
+		NamespacedName: types.NamespacedName{Namespace: "default"},
+		Selector:       selector,
+	})
+	watcher.Watch(WatchRequest{
+		NodeID:         "configs",
+		GVR:            testCmGVR,
+		NamespacedName: types.NamespacedName{Namespace: "default"},
+		Selector:       selector,
+	})
+	_ = watcher.Done(true)
 
 	// Should only have 1 collection entry, not 2.
 	_, collection := coord.WatchRequestCount()
@@ -523,11 +511,10 @@ func TestDuplicateCollectionRegistration_Idempotent(t *testing.T) {
 
 	// One matching event should trigger exactly one enqueue, not two.
 	coord.RouteEvent(Event{
-		Type:      EventAdd,
-		GVR:       testCmGVR,
-		Name:      "config-1",
-		Namespace: "default",
-		Labels:    map[string]string{"app": "my-app"},
+		Type:           EventAdd,
+		GVR:            testCmGVR,
+		NamespacedName: types.NamespacedName{Name: "config-1", Namespace: "default"},
+		Labels:         map[string]string{"app": "my-app"},
 	})
 	assert.Equal(t, 1, recorder.count(), "should enqueue once, not twice")
 }
@@ -539,28 +526,26 @@ func TestScalarAndCollectionDedup(t *testing.T) {
 	// Instance watches a configmap both as a scalar and via a collection selector
 	// that would also match it.
 	watcher := coord.ForInstance(testParentGVR, instance)
-	require.NoError(t, watcher.Watch(WatchRequest{
-		NodeID:    "specific-cm",
-		GVR:       testCmGVR,
-		Name:      "config-1",
-		Namespace: "default",
-	}))
+	watcher.Watch(WatchRequest{
+		NodeID:         "specific-cm",
+		GVR:            testCmGVR,
+		NamespacedName: types.NamespacedName{Name: "config-1", Namespace: "default"},
+	})
 	selector, _ := labels.Parse("app=my-app")
-	require.NoError(t, watcher.Watch(WatchRequest{
-		NodeID:    "all-configs",
-		GVR:       testCmGVR,
-		Namespace: "default",
-		Selector:  selector,
-	}))
-	watcher.Done(true)
+	watcher.Watch(WatchRequest{
+		NodeID:         "all-configs",
+		GVR:            testCmGVR,
+		NamespacedName: types.NamespacedName{Namespace: "default"},
+		Selector:       selector,
+	})
+	_ = watcher.Done(true)
 
 	// An event matching both scalar and collection should enqueue only once.
 	coord.RouteEvent(Event{
-		Type:      EventUpdate,
-		GVR:       testCmGVR,
-		Name:      "config-1",
-		Namespace: "default",
-		Labels:    map[string]string{"app": "my-app"},
+		Type:           EventUpdate,
+		GVR:            testCmGVR,
+		NamespacedName: types.NamespacedName{Name: "config-1", Namespace: "default"},
+		Labels:         map[string]string{"app": "my-app"},
 	})
 	assert.Equal(t, 1, recorder.count(), "instance matching both scalar and collection should be enqueued once")
 }
@@ -572,42 +557,40 @@ func TestCollectionWatch_SelectorChange(t *testing.T) {
 	// Cycle 1: collection watch with selector app=v1.
 	w1 := coord.ForInstance(testParentGVR, instance)
 	selectorV1, _ := labels.Parse("app=v1")
-	require.NoError(t, w1.Watch(WatchRequest{
-		NodeID:    "configs",
-		GVR:       testCmGVR,
-		Namespace: "default",
-		Selector:  selectorV1,
-	}))
-	w1.Done(true)
+	w1.Watch(WatchRequest{
+		NodeID:         "configs",
+		GVR:            testCmGVR,
+		NamespacedName: types.NamespacedName{Namespace: "default"},
+		Selector:       selectorV1,
+	})
+	_ = w1.Done(true)
 
 	// Cycle 2: same nodeID, different selector (app=v2).
 	w2 := coord.ForInstance(testParentGVR, instance)
 	selectorV2, _ := labels.Parse("app=v2")
-	require.NoError(t, w2.Watch(WatchRequest{
-		NodeID:    "configs",
-		GVR:       testCmGVR,
-		Namespace: "default",
-		Selector:  selectorV2,
-	}))
-	w2.Done(true)
+	w2.Watch(WatchRequest{
+		NodeID:         "configs",
+		GVR:            testCmGVR,
+		NamespacedName: types.NamespacedName{Namespace: "default"},
+		Selector:       selectorV2,
+	})
+	_ = w2.Done(true)
 
 	// Old selector should not match.
 	coord.RouteEvent(Event{
-		Type:      EventAdd,
-		GVR:       testCmGVR,
-		Name:      "config-1",
-		Namespace: "default",
-		Labels:    map[string]string{"app": "v1"},
+		Type:           EventAdd,
+		GVR:            testCmGVR,
+		NamespacedName: types.NamespacedName{Name: "config-1", Namespace: "default"},
+		Labels:         map[string]string{"app": "v1"},
 	})
 	assert.Equal(t, 0, recorder.count(), "old selector should not match after change")
 
 	// New selector should match.
 	coord.RouteEvent(Event{
-		Type:      EventAdd,
-		GVR:       testCmGVR,
-		Name:      "config-2",
-		Namespace: "default",
-		Labels:    map[string]string{"app": "v2"},
+		Type:           EventAdd,
+		GVR:            testCmGVR,
+		NamespacedName: types.NamespacedName{Name: "config-2", Namespace: "default"},
+		Labels:         map[string]string{"app": "v2"},
 	})
 	assert.Equal(t, 1, recorder.count(), "new selector should match")
 
@@ -622,23 +605,22 @@ func TestRouteEvent_OldLabelsMatch(t *testing.T) {
 
 	watcher := coord.ForInstance(testParentGVR, instance)
 	selector, _ := labels.Parse("team=alpha")
-	require.NoError(t, watcher.Watch(WatchRequest{
-		NodeID:    "configs",
-		GVR:       testCmGVR,
-		Namespace: "default",
-		Selector:  selector,
-	}))
-	watcher.Done(true)
+	watcher.Watch(WatchRequest{
+		NodeID:         "configs",
+		GVR:            testCmGVR,
+		NamespacedName: types.NamespacedName{Namespace: "default"},
+		Selector:       selector,
+	})
+	_ = watcher.Done(true)
 
 	// Update event: new labels no longer match, but old labels did.
 	// Should still trigger re-reconciliation (label-loss detection).
 	coord.RouteEvent(Event{
-		Type:      EventUpdate,
-		GVR:       testCmGVR,
-		Name:      "config-1",
-		Namespace: "default",
-		Labels:    map[string]string{"team": "beta"},
-		OldLabels: map[string]string{"team": "alpha"},
+		Type:           EventUpdate,
+		GVR:            testCmGVR,
+		NamespacedName: types.NamespacedName{Name: "config-1", Namespace: "default"},
+		Labels:         map[string]string{"team": "beta"},
+		OldLabels:      map[string]string{"team": "alpha"},
 	})
 	assert.Equal(t, 1, recorder.count(), "should enqueue when old labels matched selector (label-loss)")
 }
@@ -648,10 +630,10 @@ func TestWatchRequestCount(t *testing.T) {
 	instance := types.NamespacedName{Name: "my-app", Namespace: "default"}
 
 	watcher := coord.ForInstance(testParentGVR, instance)
-	require.NoError(t, watcher.Watch(WatchRequest{NodeID: "deploy", GVR: testDeployGVR, Name: "d1", Namespace: "default"}))
+	watcher.Watch(WatchRequest{NodeID: "deploy", GVR: testDeployGVR, NamespacedName: types.NamespacedName{Name: "d1", Namespace: "default"}})
 	selector, _ := labels.Parse("app=test")
-	require.NoError(t, watcher.Watch(WatchRequest{NodeID: "configs", GVR: testCmGVR, Namespace: "default", Selector: selector}))
-	watcher.Done(true)
+	watcher.Watch(WatchRequest{NodeID: "configs", GVR: testCmGVR, NamespacedName: types.NamespacedName{Namespace: "default"}, Selector: selector})
+	_ = watcher.Done(true)
 
 	scalar, collection := coord.WatchRequestCount()
 	assert.Equal(t, 1, scalar)
@@ -661,18 +643,16 @@ func TestWatchRequestCount(t *testing.T) {
 func TestNoopInstanceWatcher(t *testing.T) {
 	noop := NoopInstanceWatcher{}
 
-	// Watch should return nil.
-	err := noop.Watch(WatchRequest{
-		NodeID:    "test",
-		GVR:       testDeployGVR,
-		Name:      "d1",
-		Namespace: "default",
+	// Watch should not panic.
+	noop.Watch(WatchRequest{
+		NodeID:         "test",
+		GVR:            testDeployGVR,
+		NamespacedName: types.NamespacedName{Name: "d1", Namespace: "default"},
 	})
-	assert.NoError(t, err)
 
-	// Done should not panic.
-	noop.Done(true)
-	noop.Done(false)
+	// Done should not panic and should return nil.
+	assert.NoError(t, noop.Done(true))
+	assert.NoError(t, noop.Done(false))
 }
 
 func TestRemoveInstance_NonExistent(t *testing.T) {
@@ -688,7 +668,7 @@ func TestDoneInstance_NoState(t *testing.T) {
 
 	// Calling Done on a watcher that never called Watch should not panic.
 	watcher := coord.ForInstance(testParentGVR, types.NamespacedName{Name: "empty", Namespace: "default"})
-	watcher.Done(true)
+	_ = watcher.Done(true)
 	assert.Equal(t, 0, coord.InstanceWatchCount())
 }
 
@@ -697,27 +677,25 @@ func TestAbortInstance_RollsBackFailedCycleTargetChange(t *testing.T) {
 	instance := types.NamespacedName{Name: "my-app", Namespace: "default"}
 
 	w1 := coord.ForInstance(testParentGVR, instance)
-	require.NoError(t, w1.Watch(WatchRequest{
-		NodeID:    "dependency",
-		GVR:       testDeployGVR,
-		Name:      "d1",
-		Namespace: "default",
-	}))
-	w1.Done(true)
+	w1.Watch(WatchRequest{
+		NodeID:         "dependency",
+		GVR:            testDeployGVR,
+		NamespacedName: types.NamespacedName{Name: "d1", Namespace: "default"},
+	})
+	_ = w1.Done(true)
 
 	w2 := coord.ForInstance(testParentGVR, instance)
-	require.NoError(t, w2.Watch(WatchRequest{
-		NodeID:    "dependency",
-		GVR:       testServiceGVR,
-		Name:      "s1",
-		Namespace: "default",
-	}))
-	w2.Done(false)
+	w2.Watch(WatchRequest{
+		NodeID:         "dependency",
+		GVR:            testServiceGVR,
+		NamespacedName: types.NamespacedName{Name: "s1", Namespace: "default"},
+	})
+	_ = w2.Done(false)
 
-	coord.RouteEvent(Event{Type: EventUpdate, GVR: testServiceGVR, Name: "s1", Namespace: "default"})
+	coord.RouteEvent(Event{Type: EventUpdate, GVR: testServiceGVR, NamespacedName: types.NamespacedName{Name: "s1", Namespace: "default"}})
 	assert.Equal(t, 0, recorder.count(), "aborted target change should not stay active")
 
-	coord.RouteEvent(Event{Type: EventUpdate, GVR: testDeployGVR, Name: "d1", Namespace: "default"})
+	coord.RouteEvent(Event{Type: EventUpdate, GVR: testDeployGVR, NamespacedName: types.NamespacedName{Name: "d1", Namespace: "default"}})
 	assert.Equal(t, 1, recorder.count(), "previous committed watch should remain active after abort")
 
 	assert.NotNil(t, coord.watches.GetInformer(testDeployGVR), "previous informer should stay running")
@@ -733,24 +711,22 @@ func TestAbortInstance_SameTargetKeepsPreviousWatch(t *testing.T) {
 	instance := types.NamespacedName{Name: "my-app", Namespace: "default"}
 
 	w1 := coord.ForInstance(testParentGVR, instance)
-	require.NoError(t, w1.Watch(WatchRequest{
-		NodeID:    "dependency",
-		GVR:       testDeployGVR,
-		Name:      "d1",
-		Namespace: "default",
-	}))
-	w1.Done(true)
+	w1.Watch(WatchRequest{
+		NodeID:         "dependency",
+		GVR:            testDeployGVR,
+		NamespacedName: types.NamespacedName{Name: "d1", Namespace: "default"},
+	})
+	_ = w1.Done(true)
 
 	w2 := coord.ForInstance(testParentGVR, instance)
-	require.NoError(t, w2.Watch(WatchRequest{
-		NodeID:    "dependency",
-		GVR:       testDeployGVR,
-		Name:      "d1",
-		Namespace: "default",
-	}))
-	w2.Done(false)
+	w2.Watch(WatchRequest{
+		NodeID:         "dependency",
+		GVR:            testDeployGVR,
+		NamespacedName: types.NamespacedName{Name: "d1", Namespace: "default"},
+	})
+	_ = w2.Done(false)
 
-	coord.RouteEvent(Event{Type: EventUpdate, GVR: testDeployGVR, Name: "d1", Namespace: "default"})
+	coord.RouteEvent(Event{Type: EventUpdate, GVR: testDeployGVR, NamespacedName: types.NamespacedName{Name: "d1", Namespace: "default"}})
 	assert.Equal(t, 1, recorder.count(), "aborting an unchanged request must not drop the previous watch")
 
 	scalar, collection := coord.WatchRequestCount()
@@ -763,36 +739,33 @@ func TestAbortInstance_DoesNotPromoteFailedCurrentOnLaterSuccess(t *testing.T) {
 	instance := types.NamespacedName{Name: "my-app", Namespace: "default"}
 
 	w1 := coord.ForInstance(testParentGVR, instance)
-	require.NoError(t, w1.Watch(WatchRequest{
-		NodeID:    "dependency",
-		GVR:       testDeployGVR,
-		Name:      "d1",
-		Namespace: "default",
-	}))
-	w1.Done(true)
+	w1.Watch(WatchRequest{
+		NodeID:         "dependency",
+		GVR:            testDeployGVR,
+		NamespacedName: types.NamespacedName{Name: "d1", Namespace: "default"},
+	})
+	_ = w1.Done(true)
 
 	w2 := coord.ForInstance(testParentGVR, instance)
-	require.NoError(t, w2.Watch(WatchRequest{
-		NodeID:    "dependency",
-		GVR:       testServiceGVR,
-		Name:      "s1",
-		Namespace: "default",
-	}))
-	w2.Done(false)
+	w2.Watch(WatchRequest{
+		NodeID:         "dependency",
+		GVR:            testServiceGVR,
+		NamespacedName: types.NamespacedName{Name: "s1", Namespace: "default"},
+	})
+	_ = w2.Done(false)
 
 	w3 := coord.ForInstance(testParentGVR, instance)
-	require.NoError(t, w3.Watch(WatchRequest{
-		NodeID:    "dependency",
-		GVR:       testDeployGVR,
-		Name:      "d1",
-		Namespace: "default",
-	}))
-	w3.Done(true)
+	w3.Watch(WatchRequest{
+		NodeID:         "dependency",
+		GVR:            testDeployGVR,
+		NamespacedName: types.NamespacedName{Name: "d1", Namespace: "default"},
+	})
+	_ = w3.Done(true)
 
-	coord.RouteEvent(Event{Type: EventUpdate, GVR: testServiceGVR, Name: "s1", Namespace: "default"})
+	coord.RouteEvent(Event{Type: EventUpdate, GVR: testServiceGVR, NamespacedName: types.NamespacedName{Name: "s1", Namespace: "default"}})
 	assert.Equal(t, 0, recorder.count(), "aborted requests must not be committed by a later successful Done")
 
-	coord.RouteEvent(Event{Type: EventUpdate, GVR: testDeployGVR, Name: "d1", Namespace: "default"})
+	coord.RouteEvent(Event{Type: EventUpdate, GVR: testDeployGVR, NamespacedName: types.NamespacedName{Name: "d1", Namespace: "default"}})
 	assert.Equal(t, 1, recorder.count(), "successful cycle should keep only the committed watch")
 }
 
@@ -806,38 +779,36 @@ func TestAbortInstance_RollsBackCollectionSelectorChange(t *testing.T) {
 	require.NoError(t, err)
 
 	w1 := coord.ForInstance(testParentGVR, instance)
-	require.NoError(t, w1.Watch(WatchRequest{
-		NodeID:    "configs",
-		GVR:       testCmGVR,
-		Namespace: "default",
-		Selector:  selectorV1,
-	}))
-	w1.Done(true)
+	w1.Watch(WatchRequest{
+		NodeID:         "configs",
+		GVR:            testCmGVR,
+		NamespacedName: types.NamespacedName{Namespace: "default"},
+		Selector:       selectorV1,
+	})
+	_ = w1.Done(true)
 
 	w2 := coord.ForInstance(testParentGVR, instance)
-	require.NoError(t, w2.Watch(WatchRequest{
-		NodeID:    "configs",
-		GVR:       testCmGVR,
-		Namespace: "default",
-		Selector:  selectorV2,
-	}))
-	w2.Done(false)
+	w2.Watch(WatchRequest{
+		NodeID:         "configs",
+		GVR:            testCmGVR,
+		NamespacedName: types.NamespacedName{Namespace: "default"},
+		Selector:       selectorV2,
+	})
+	_ = w2.Done(false)
 
 	coord.RouteEvent(Event{
-		Type:      EventUpdate,
-		GVR:       testCmGVR,
-		Name:      "cm-v2",
-		Namespace: "default",
-		Labels:    map[string]string{"app": "v2"},
+		Type:           EventUpdate,
+		GVR:            testCmGVR,
+		NamespacedName: types.NamespacedName{Name: "cm-v2", Namespace: "default"},
+		Labels:         map[string]string{"app": "v2"},
 	})
 	assert.Equal(t, 0, recorder.count(), "aborted selector change should not stay active")
 
 	coord.RouteEvent(Event{
-		Type:      EventUpdate,
-		GVR:       testCmGVR,
-		Name:      "cm-v1",
-		Namespace: "default",
-		Labels:    map[string]string{"app": "v1"},
+		Type:           EventUpdate,
+		GVR:            testCmGVR,
+		NamespacedName: types.NamespacedName{Name: "cm-v1", Namespace: "default"},
+		Labels:         map[string]string{"app": "v1"},
 	})
 	assert.Equal(t, 1, recorder.count(), "previous committed selector should remain active after abort")
 }
@@ -862,17 +833,17 @@ func TestEnsureWatch_SyncError(t *testing.T) {
 
 	watcher := coord.ForInstance(testParentGVR, instance)
 
-	// Watch always returns nil (local append only).
-	err := watcher.Watch(WatchRequest{
-		NodeID:    "deploy",
-		GVR:       testDeployGVR,
-		Name:      "d1",
-		Namespace: "default",
+	// Watch is a local append only — should not panic.
+	watcher.Watch(WatchRequest{
+		NodeID:         "deploy",
+		GVR:            testDeployGVR,
+		NamespacedName: types.NamespacedName{Name: "d1", Namespace: "default"},
 	})
-	assert.NoError(t, err)
 
-	// Done(true) calls EnsureWatch internally — should not panic even on sync error.
-	watcher.Done(true)
+	// Done(true) calls EnsureWatch internally — the sync error should propagate.
+	err := watcher.Done(true)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "cache sync timeout")
 
 	wm.Shutdown()
 }
@@ -883,7 +854,7 @@ func TestRemoveInstance_UncommittedWatchesIgnored(t *testing.T) {
 
 	// Watch without Done — pending watches are local to the instanceWatcher.
 	watcher := coord.ForInstance(testParentGVR, instance)
-	require.NoError(t, watcher.Watch(WatchRequest{NodeID: "deploy", GVR: testDeployGVR, Name: "d1", Namespace: "default"}))
+	watcher.Watch(WatchRequest{NodeID: "deploy", GVR: testDeployGVR, NamespacedName: types.NamespacedName{Name: "d1", Namespace: "default"}})
 
 	// RemoveInstance has nothing to clean up (nothing committed).
 	coord.RemoveInstance(testParentGVR, instance)
@@ -903,20 +874,19 @@ func TestUpdateWatchRequestMetrics_ClearsStaleGauges(t *testing.T) {
 
 	// Watch a deployment and a configmap collection.
 	watcher := coord.ForInstance(testParentGVR, instance)
-	require.NoError(t, watcher.Watch(WatchRequest{
-		NodeID:    "deploy",
-		GVR:       testDeployGVR,
-		Name:      "d1",
-		Namespace: "default",
-	}))
+	watcher.Watch(WatchRequest{
+		NodeID:         "deploy",
+		GVR:            testDeployGVR,
+		NamespacedName: types.NamespacedName{Name: "d1", Namespace: "default"},
+	})
 	selector, _ := labels.Parse("app=test")
-	require.NoError(t, watcher.Watch(WatchRequest{
-		NodeID:    "configs",
-		GVR:       testCmGVR,
-		Namespace: "default",
-		Selector:  selector,
-	}))
-	watcher.Done(true)
+	watcher.Watch(WatchRequest{
+		NodeID:         "configs",
+		GVR:            testCmGVR,
+		NamespacedName: types.NamespacedName{Namespace: "default"},
+		Selector:       selector,
+	})
+	_ = watcher.Done(true)
 
 	// Verify gauges are set.
 	scalar, collection := coord.WatchRequestCount()
@@ -941,22 +911,20 @@ func TestUpdateWatchRequestMetrics_PartialRemoval(t *testing.T) {
 
 	// inst1 watches deployments, inst2 watches services.
 	w1 := coord.ForInstance(testParentGVR, inst1)
-	require.NoError(t, w1.Watch(WatchRequest{
-		NodeID:    "deploy",
-		GVR:       testDeployGVR,
-		Name:      "d1",
-		Namespace: "default",
-	}))
-	w1.Done(true)
+	w1.Watch(WatchRequest{
+		NodeID:         "deploy",
+		GVR:            testDeployGVR,
+		NamespacedName: types.NamespacedName{Name: "d1", Namespace: "default"},
+	})
+	_ = w1.Done(true)
 
 	w2 := coord.ForInstance(testParentGVR, inst2)
-	require.NoError(t, w2.Watch(WatchRequest{
-		NodeID:    "service",
-		GVR:       testServiceGVR,
-		Name:      "s1",
-		Namespace: "default",
-	}))
-	w2.Done(true)
+	w2.Watch(WatchRequest{
+		NodeID:         "service",
+		GVR:            testServiceGVR,
+		NamespacedName: types.NamespacedName{Name: "s1", Namespace: "default"},
+	})
+	_ = w2.Done(true)
 
 	scalar, _ := coord.WatchRequestCount()
 	assert.Equal(t, 2, scalar, "should have 2 scalar watch requests")

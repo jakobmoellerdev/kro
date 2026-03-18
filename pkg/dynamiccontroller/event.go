@@ -14,7 +14,10 @@
 
 package dynamiccontroller
 
-import "k8s.io/apimachinery/pkg/runtime/schema"
+import (
+	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/apimachinery/pkg/types"
+)
 
 // EventType identifies the kind of change that triggered an event.
 type EventType string
@@ -29,11 +32,10 @@ const (
 // Consumers decide what to act on -- no old/new comparison or generation
 // filtering is performed by the watch layer.
 type Event struct {
-	Type      EventType
-	GVR       schema.GroupVersionResource
-	Name      string
-	Namespace string
-	Labels    map[string]string
+	Type EventType
+	GVR  schema.GroupVersionResource
+	types.NamespacedName
+	Labels map[string]string
 	// OldLabels holds the labels from the previous version of the object
 	// (populated only for update events). Used by collection watches to detect
 	// label changes that cause an object to enter or leave a selector match.

@@ -24,6 +24,7 @@ import (
 	"k8s.io/apimachinery/pkg/labels"
 	apimachineryruntime "k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/apimachinery/pkg/types"
 
 	"github.com/kubernetes-sigs/kro/pkg/controller/instance/applyset"
 	"github.com/kubernetes-sigs/kro/pkg/dynamiccontroller"
@@ -809,24 +810,24 @@ func (c *Controller) processExternalCollectionNode(
 
 // requestWatch registers a scalar watch request with the coordinator.
 func requestWatch(rcx *ReconcileContext, nodeID string, gvr schema.GroupVersionResource, name, namespace string) {
-	if err := rcx.Watcher.Watch(dynamiccontroller.WatchRequest{
-		NodeID:    nodeID,
-		GVR:       gvr,
-		Name:      name,
-		Namespace: namespace,
-	}); err != nil {
-		rcx.Log.Error(err, "failed to register watch", "nodeID", nodeID, "gvr", gvr)
-	}
+	rcx.Watcher.Watch(dynamiccontroller.WatchRequest{
+		NodeID: nodeID,
+		GVR:    gvr,
+		NamespacedName: types.NamespacedName{
+			Name:      name,
+			Namespace: namespace,
+		},
+	})
 }
 
 // requestCollectionWatch registers a collection (selector-based) watch request.
 func requestCollectionWatch(rcx *ReconcileContext, nodeID string, gvr schema.GroupVersionResource, namespace string, selector labels.Selector) {
-	if err := rcx.Watcher.Watch(dynamiccontroller.WatchRequest{
-		NodeID:    nodeID,
-		GVR:       gvr,
-		Namespace: namespace,
-		Selector:  selector,
-	}); err != nil {
-		rcx.Log.Error(err, "failed to register collection watch", "nodeID", nodeID, "gvr", gvr)
-	}
+	rcx.Watcher.Watch(dynamiccontroller.WatchRequest{
+		NodeID: nodeID,
+		GVR:    gvr,
+		NamespacedName: types.NamespacedName{
+			Namespace: namespace,
+		},
+		Selector: selector,
+	})
 }
