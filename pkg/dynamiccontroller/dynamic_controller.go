@@ -12,48 +12,18 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// Package dynamiccontroller provides a flexible and efficient solution for
-// managing multiple GroupVersionResources (GVRs) in a Kubernetes environment.
-// It implements a single controller capable of dynamically handling various
-// resource types concurrently, adapting to runtime changes without system restarts.
+// Package dynamiccontroller provides a single controller capable of dynamically
+// managing multiple GroupVersionResources (GVRs) in a Kubernetes cluster. It
+// creates and removes informers at runtime, allowing kro to watch user-defined
+// custom resources without restarts.
 //
-// Key features and design considerations:
+// Architecture layers:
 //
-//  1. Multi GVR management: It handles multiple resource types concurrently,
-//     creating and managing separate workflows for each.
-//
-//  2. Dynamic informer management: Creates and deletes informers on the fly
-//     for new resource types, allowing real time adaptation to changes in the
-//     cluster.
-//
-//  3. Minimal disruption: Operations on one resource type do not affect
-//     the performance or functionality of others.
-//
-//  4. Minimalism: Unlike controller-runtime, this implementation
-//     is tailored specifically for kro's needs, avoiding unnecessary
-//     dependencies and overhead.
-//
-//  5. Future Extensibility: It allows for future enhancements such as
-//     sharding and CEL cost aware leader election, which are not readily
-//     achievable with k8s.io/controller-runtime.
-//
-// Why not use k8s.io/controller-runtime:
-//
-//  1. Static nature: controller-runtime is optimized for statically defined
-//     controllers, however kro requires runtime creation and management
-//     of controllers for various GVRs.
-//
-//  2. Overhead reduction: by not including unused features like leader election
-//     and certain metrics, this implementation remains minimalistic and efficient.
-//
-//  3. Customization: this design allows for deep customization and
-//     optimization specific to kro's unique requirements for managing
-//     multiple GVRs dynamically.
-//
-// This implementation aims to provide a reusable, efficient, and flexible
-// solution for dynamic multi-GVR controller management in Kubernetes environments.
-//
-// NOTE(a-hilaly): Potentially we might open source this package for broader use cases.
+//  1. WatchManager: manages informer lifecycle per GVR (owner-set based).
+//  2. WatchCoordinator: aggregates instance watch requests, maintains reverse
+//     indexes for event routing, and manages shared watches on the WatchManager.
+//  3. DynamicController: orchestrates parent watches (one per RGD), the work
+//     queue, and handler dispatch.
 package dynamiccontroller
 
 import (
