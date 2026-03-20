@@ -76,6 +76,90 @@ func TestBuilderCache_SchemaDeclType(t *testing.T) {
 	}
 }
 
+func TestBuilderCache_SchemaDeclTypeByName(t *testing.T) {
+	cache := NewBuilderCache()
+
+	schema := &spec.Schema{
+		SchemaProps: spec.SchemaProps{
+			Type: []string{"object"},
+			Properties: map[string]spec.Schema{
+				"name": {SchemaProps: spec.SchemaProps{Type: []string{"string"}}},
+				"age":  {SchemaProps: spec.SchemaProps{Type: []string{"integer"}}},
+			},
+		},
+	}
+
+	// First call should compute and cache
+	dt1 := cache.SchemaDeclTypeByName("kro.deploy.spec", schema, schemaDeclTypeCreate)
+	if dt1 == nil {
+		t.Fatal("expected non-nil DeclType")
+	}
+
+	// Second call with same typeName should return cached result, even with different schema pointer
+	schemaCopy := &spec.Schema{
+		SchemaProps: spec.SchemaProps{
+			Type: []string{"object"},
+			Properties: map[string]spec.Schema{
+				"name": {SchemaProps: spec.SchemaProps{Type: []string{"string"}}},
+				"age":  {SchemaProps: spec.SchemaProps{Type: []string{"integer"}}},
+			},
+		},
+	}
+	dt2 := cache.SchemaDeclTypeByName("kro.deploy.spec", schemaCopy, schemaDeclTypeCreate)
+	if dt1 != dt2 {
+		t.Error("expected same pointer for same typeName")
+	}
+
+	// Different typeName should produce independent result
+	dt3 := cache.SchemaDeclTypeByName("kro.deploy.status", schema, schemaDeclTypeCreate)
+	if dt3 == nil {
+		t.Fatal("expected non-nil DeclType for different typeName")
+	}
+	if dt3 == dt1 {
+		t.Error("expected different DeclType for different typeName")
+	}
+
+	// Nil schema should return nil
+	if cache.SchemaDeclTypeByName("kro.nil", nil, schemaDeclTypeCreate) != nil {
+		t.Error("expected nil for nil schema")
+	}
+}
+
+func TestBuilderCache_MaybeAssignTypeNameByKey(t *testing.T) {
+	cache := NewBuilderCache()
+
+	schema := &spec.Schema{
+		SchemaProps: spec.SchemaProps{
+			Type: []string{"object"},
+			Properties: map[string]spec.Schema{
+				"name": {SchemaProps: spec.SchemaProps{Type: []string{"string"}}},
+			},
+		},
+	}
+
+	dt := cache.SchemaDeclTypeByName("kro.test", schema, schemaDeclTypeCreate)
+	if dt == nil {
+		t.Fatal("expected non-nil DeclType")
+	}
+
+	named1 := cache.MaybeAssignTypeNameByKey("kro.test", dt, "kro.test")
+	if named1 == nil {
+		t.Fatal("expected non-nil named DeclType")
+	}
+
+	// Same key should return cached result
+	named2 := cache.MaybeAssignTypeNameByKey("kro.test", dt, "kro.test")
+	if named1 != named2 {
+		t.Error("expected same pointer for same key")
+	}
+
+	// Different key should produce different result
+	named3 := cache.MaybeAssignTypeNameByKey("kro.other", dt, "kro.other")
+	if named3 == named1 {
+		t.Error("expected different DeclType for different key")
+	}
+}
+
 func TestBuilderCache_MaybeAssignTypeName(t *testing.T) {
 	cache := NewBuilderCache()
 

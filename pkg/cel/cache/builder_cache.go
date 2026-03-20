@@ -27,10 +27,12 @@ import (
 // instance so caches persist across reconciles but are GC-able when the
 // Builder is replaced.
 type BuilderCache struct {
-	declTypes     sync.Map // key: *spec.Schema, value: *apiservercel.DeclType
-	namedTypes    sync.Map // key: namedTypeCacheKey, value: *apiservercel.DeclType
-	typedEnvs     sync.Map // key: string, value: *TypedEnvEntry
-	fieldTypeMaps sync.Map // key: *apiservercel.DeclType, value: map[string]*apiservercel.DeclType
+	declTypes       sync.Map // key: *spec.Schema, value: *apiservercel.DeclType
+	declTypesByName sync.Map // key: string (typeName), value: *apiservercel.DeclType
+	namedTypes      sync.Map // key: namedTypeCacheKey, value: *apiservercel.DeclType
+	namedTypesByKey sync.Map // key: string, value: *apiservercel.DeclType
+	typedEnvs       sync.Map // key: string, value: *TypedEnvEntry
+	fieldTypeMaps   sync.Map // key: *apiservercel.DeclType, value: map[string]*apiservercel.DeclType
 }
 
 // NewBuilderCache returns a fresh BuilderCache instance.
@@ -71,6 +73,41 @@ func (c *BuilderCache) MaybeAssignTypeName(schema *spec.Schema, declType *apiser
 	builderCacheMissesTotal.WithLabelValues("named_type").Inc()
 	named := declType.MaybeAssignTypeName(typeName)
 	c.namedTypes.Store(key, named)
+	builderCacheSize.WithLabelValues("named_type").Inc()
+	return named
+}
+
+// SchemaDeclTypeByName returns a cached DeclType keyed by typeName string.
+// This avoids pointer-stability issues when schemas are copied from map
+// values (e.g. spec.Schema.Properties). The schema is still passed to the
+// create callback on cache miss.
+func (c *BuilderCache) SchemaDeclTypeByName(typeName string, schema *spec.Schema, create func(*spec.Schema) *apiservercel.DeclType) *apiservercel.DeclType {
+	if schema == nil {
+		return nil
+	}
+	if v, ok := c.declTypesByName.Load(typeName); ok {
+		builderCacheHitsTotal.WithLabelValues("decl_type").Inc()
+		return v.(*apiservercel.DeclType)
+	}
+	builderCacheMissesTotal.WithLabelValues("decl_type").Inc()
+	declType := create(schema)
+	if declType != nil {
+		c.declTypesByName.Store(typeName, declType)
+		builderCacheSize.WithLabelValues("decl_type").Inc()
+	}
+	return declType
+}
+
+// MaybeAssignTypeNameByKey returns a cached named DeclType keyed by a string
+// key instead of a (schema, name) pair. This avoids pointer-stability issues.
+func (c *BuilderCache) MaybeAssignTypeNameByKey(key string, declType *apiservercel.DeclType, typeName string) *apiservercel.DeclType {
+	if v, ok := c.namedTypesByKey.Load(key); ok {
+		builderCacheHitsTotal.WithLabelValues("named_type").Inc()
+		return v.(*apiservercel.DeclType)
+	}
+	builderCacheMissesTotal.WithLabelValues("named_type").Inc()
+	named := declType.MaybeAssignTypeName(typeName)
+	c.namedTypesByKey.Store(key, named)
 	builderCacheSize.WithLabelValues("named_type").Inc()
 	return named
 }

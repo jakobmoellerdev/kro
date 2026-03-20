@@ -1074,11 +1074,11 @@ func getCelTypeFromSchema(builderCache *celcache.BuilderCache, schema *spec.Sche
 	schemaDeclType := func(s *spec.Schema) *apiservercel.DeclType {
 		return krocel.SchemaDeclTypeWithMetadata(&openapi.Schema{Schema: s}, false)
 	}
-	declType := builderCache.SchemaDeclType(schema, schemaDeclType)
+	declType := builderCache.SchemaDeclTypeByName(typeName, schema, schemaDeclType)
 	if declType == nil {
 		return cel.DynType
 	}
-	declType = builderCache.MaybeAssignTypeName(schema, declType, typeName)
+	declType = builderCache.MaybeAssignTypeNameByKey(typeName, declType, typeName)
 	return declType.CelType()
 }
 
