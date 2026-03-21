@@ -108,14 +108,13 @@ func (c *Controller) buildApplyInputs(rcx *ReconcileContext) (*reconcileResult, 
 		return nil, rcx.delayedRequeue(fmt.Errorf("project failed: %w", err))
 	}
 
-	if err := c.patchInstanceWithApplySetMetadata(rcx, r.supersetPatch); err != nil {
-		return nil, rcx.delayedRequeue(fmt.Errorf("failed to patch instance with applyset labels: %w", err))
-	}
-
 	return r, nil
 }
 
-// applyResources submits the desired resources to the cluster.
+// applyResources submits the desired resources to the cluster and then patches
+// the parent instance with superset ApplySet metadata. The metadata patch is
+// done after the child applies so the parent never claims ownership of children
+// that don't yet exist, avoiding stale annotations on mid-reconcile crashes.
 func (c *Controller) applyResources(rcx *ReconcileContext, r *reconcileResult) error {
 	result, batchMeta, err := r.applier.Apply(rcx.Ctx, r.resources, applyset.ApplyMode{})
 	if err != nil {
@@ -124,6 +123,11 @@ func (c *Controller) applyResources(rcx *ReconcileContext, r *reconcileResult) e
 	r.applyResult = result
 	r.batchMeta = batchMeta
 	r.clusterMutated = result.HasClusterMutation()
+
+	if err := c.patchInstanceWithApplySetMetadata(rcx, r.supersetPatch); err != nil {
+		return rcx.delayedRequeue(fmt.Errorf("failed to patch instance with applyset labels: %w", err))
+	}
+
 	return nil
 }
 
