@@ -154,7 +154,26 @@ func (s *Simple) Apply(ctx context.Context, rt *runtime.Runtime, w watchrouter.W
 			}
 			n.SetObserved(desired, desired)
 			publishScope(rt, n, n.Observed())
-		case compiler.NodeKindRef, compiler.NodeKindWatch:
+		case compiler.NodeKindRef:
+			observed, err := s.applyRef(ctx, w, rt, n, desired)
+			if err != nil {
+				// A referenced object that isn't in the cluster yet is a
+				// soft condition: it may be applied separately or created
+				// later. Its identity is not ours to prune (read-only), so
+				// record it Unresolved and requeue instead of failing hard.
+				if errors.Is(err, ErrNotReady) || isSoftRuntimeErr(err) {
+					result.Unresolved = append(result.Unresolved, n.ID())
+					recordSoft(fmt.Errorf("apply %q (ref): %w", n.ID(), err))
+					continue
+				}
+				return result, fmt.Errorf("apply %q (ref): %w", n.ID(), err)
+			}
+			// Read-only: publish the live object so dependents resolve, but
+			// never append to result.Applied — kro must not own, prune, or
+			// delete a resource it only reads.
+			n.SetObserved(observed, desired)
+			publishScope(rt, n, n.Observed())
+		case compiler.NodeKindWatch:
 			return result, fmt.Errorf("apply %q (%s): %w", n.ID(), n.Kind(), ErrUnsupported)
 		default:
 			return result, fmt.Errorf("apply %q: unknown kind %v", n.ID(), n.Kind())
@@ -307,6 +326,44 @@ func (s *Simple) applyTemplate(ctx context.Context, rt *runtime.Runtime, w watch
 		applied = append(applied, managedResourceFrom(n, obj))
 	}
 	return applied, nil
+}
+
+// applyRef reads the external resource a ref node points at and returns its
+// live cluster state for publication into scope. A ref is READ-ONLY: kro
+// registers a watch so the Graph re-reconciles when the referenced object
+// changes, but never applies, owns, or prunes it. The caller therefore must
+// NOT record the returned object in ApplyResult.Applied.
+//
+// A referenced object that doesn't exist yet is a soft condition, not a
+// failure: it may be applied separately or created later, so we wrap
+// ErrNotReady and let the reconciler requeue. The watch is registered before
+// the read (and fires on create), so the Graph re-enqueues once it appears.
+func (s *Simple) applyRef(ctx context.Context, w watchrouter.Watcher, rt *runtime.Runtime, n *runtime.Node, desired []*unstructured.Unstructured) ([]*unstructured.Unstructured, error) {
+	// forEach is rejected on ref nodes at compile time, so Resolve produced
+	// exactly one projected {apiVersion, kind, metadata} object.
+	if len(desired) != 1 {
+		return nil, fmt.Errorf("ref node resolved to %d objects, want 1", len(desired))
+	}
+	ref := desired[0]
+	// Fill metadata.namespace from the Graph for namespaced kinds when the
+	// ExternalRef left it empty — matches the "defaults to the instance's
+	// namespace" contract on ExternalRefMetadata.
+	s.defaultNamespace(rt, n.Namespaced(), ref)
+
+	if err := s.watchObject(w, n.ID(), n.GVR(), ref); err != nil {
+		return nil, fmt.Errorf("register watch: %w", err)
+	}
+
+	live := &unstructured.Unstructured{}
+	live.SetGroupVersionKind(ref.GroupVersionKind())
+	key := client.ObjectKey{Namespace: ref.GetNamespace(), Name: ref.GetName()}
+	if err := s.Client.Get(ctx, key, live); err != nil {
+		if apierrors.IsNotFound(err) {
+			return nil, fmt.Errorf("external ref %s %q not found: %w", ref.GetKind(), key, ErrNotReady)
+		}
+		return nil, fmt.Errorf("get external ref %s %q: %w", ref.GetKind(), key, err)
+	}
+	return []*unstructured.Unstructured{live}, nil
 }
 
 // applySubgraph runs a nested Graph node's child Program. The child Runtime

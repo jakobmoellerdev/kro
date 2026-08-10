@@ -1,0 +1,11 @@
+# Applied SEPARATELY from the Graph — this ConfigMap is NOT part of
+# wired-app. It stands in for a resource some other team/tool owns.
+# 01-wired-app.yaml reads it back via an external `ref` node and copies
+# its value into the served page, without ever managing or owning it.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: web-banner
+  namespace: demo
+data:
+  BANNER: "kro <3 KubeCon Japan!"

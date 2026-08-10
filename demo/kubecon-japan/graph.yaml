@@ -1,0 +1,71 @@
+apiVersion: kro.run/v1alpha1
+kind: Graph
+metadata:
+  name: wired-app
+  namespace: demo
+spec:
+  nodes:
+    - id: cfg
+      template:
+        apiVersion: v1
+        kind: ConfigMap
+        metadata:
+          name: web-config
+        data:
+          MESSAGE: "You rock!"
+
+    - id: extcfg
+      ref:
+        apiVersion: v1
+        kind: ConfigMap
+        metadata:
+          name: web-banner # <- applied separately in 01-external-config.yaml
+
+    - id: web
+      template:
+        apiVersion: apps/v1
+        kind: Deployment
+        metadata:
+          name: web
+        spec:
+          replicas: 2
+          selector:
+            matchLabels:
+              app: web
+          template:
+            metadata:
+              labels:
+                app: web
+            spec:
+              containers:
+                - name: nginx
+                  image: nginx:1.27-alpine
+                  ports:
+                    - containerPort: 80
+                  envFrom:
+                    - configMapRef:
+                        name: ${cfg.metadata.name} # <- ref to node "cfg"
+                  env:
+                    # Pulled from the EXTERNAL ref node via CEL — the value
+                    # comes from a ConfigMap kro only reads, never manages.
+                    - name: BANNER
+                      value: ${extcfg.data.BANNER} # <- ref to node "extcfg"
+                  # Actually USE the config: write both messages into the page
+                  # nginx serves, so `curl` returns them. Proves the values
+                  # flowed cfg -> env -> served content (managed) and
+                  # extcfg -> env -> served content (external ref).
+                  command: ["/bin/sh", "-c"]
+                  args:
+                    - printf '%s\n%s\n' "$MESSAGE" "$BANNER" > /usr/share/nginx/html/index.html && exec nginx -g 'daemon off;'
+
+    - id: svc
+      template:
+        apiVersion: v1
+        kind: Service
+        metadata:
+          name: web
+        spec:
+          selector: ${web.spec.selector.matchLabels} # <- ref to node "web"
+          ports:
+            - port: 80
+              targetPort: 80

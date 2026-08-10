@@ -1,0 +1,11 @@
+apiVersion: kro.run/v1alpha1
+kind: WiredApp
+metadata:
+  name: wired-app-instance
+  namespace: demo
+spec:
+  name: web
+  namespace: demo
+  message: "hello from kro!"
+  replicas: 2
+  bannerConfigMap: web-banner

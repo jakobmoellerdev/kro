@@ -1,0 +1,89 @@
+apiVersion: kro.run/v1alpha1
+kind: ResourceGraphDefinition
+metadata:
+  name: wired-app.kro.run
+spec:
+  schema:
+    apiVersion: v1alpha1
+    kind: WiredApp
+    spec:
+      name: string | default="web"
+      namespace: string | default="default"
+      # Written into the managed ConfigMap and displayed by the pod.
+      message: string | default="hello from kro"
+      image: string | default="nginx:1.27-alpine"
+      replicas: integer | default=2
+      # Name of an EXISTING ConfigMap (with a BANNER key) read via externalRef.
+      # Apply external-config.yaml first, or point this at your own.
+      bannerConfigMap: string | default="web-banner"
+    status:
+      availableReplicas: ${deployment.status.availableReplicas}
+      # Prove the selector was copied from the Deployment, not retyped.
+      selector: ${service.spec.selector}
+
+  resources:
+    # Managed ConfigMap — the single source of the MESSAGE value.
+    - id: config
+      template:
+        apiVersion: v1
+        kind: ConfigMap
+        metadata:
+          name: ${schema.spec.name}-config
+          namespace: ${schema.spec.namespace}
+        data:
+          MESSAGE: ${schema.spec.message}
+
+    - id: banner
+      externalRef:
+        apiVersion: v1
+        kind: ConfigMap
+        metadata:
+          name: ${schema.spec.bannerConfigMap}
+          namespace: ${schema.spec.namespace}
+
+    - id: deployment
+      readyWhen:
+        - ${deployment.spec.replicas == deployment.status.availableReplicas}
+      template:
+        apiVersion: apps/v1
+        kind: Deployment
+        metadata:
+          name: ${schema.spec.name}
+          namespace: ${schema.spec.namespace}
+        spec:
+          replicas: ${schema.spec.replicas}
+          selector:
+            matchLabels:
+              app: ${schema.spec.name}
+          template:
+            metadata:
+              labels:
+                app: ${schema.spec.name}
+            spec:
+              containers:
+                - name: nginx
+                  image: ${schema.spec.image}
+                  ports:
+                    - containerPort: 80
+                  envFrom:
+                    - configMapRef:
+                        name: ${config.metadata.name}
+                  env:
+                    - name: BANNER
+                      value: ${banner.data.BANNER}
+                  command: ["/bin/sh", "-c"]
+                  args:
+                    - printf '%s\n%s\n' "$MESSAGE" "$BANNER" > /usr/share/nginx/html/index.html && exec nginx -g 'daemon off;'
+
+    - id: service
+      template:
+        apiVersion: v1
+        kind: Service
+        metadata:
+          name: ${schema.spec.name}
+          namespace: ${schema.spec.namespace}
+        spec:
+          selector: ${deployment.spec.selector.matchLabels}
+          ports:
+            - port: 80
+              targetPort: 80
