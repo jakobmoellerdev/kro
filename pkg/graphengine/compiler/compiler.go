@@ -32,8 +32,8 @@ import (
 	krocel "github.com/kubernetes-sigs/kro/pkg/cel"
 	"github.com/kubernetes-sigs/kro/pkg/cel/ast"
 	"github.com/kubernetes-sigs/kro/pkg/graph/dag"
+	"github.com/kubernetes-sigs/kro/pkg/graph/parser"
 	"github.com/kubernetes-sigs/kro/pkg/graph/variable"
-	"github.com/kubernetes-sigs/kro/pkg/graphengine/compiler/parser"
 	schemaresolver "github.com/kubernetes-sigs/kro/pkg/graphengine/compiler/schema/resolver"
 )
 
