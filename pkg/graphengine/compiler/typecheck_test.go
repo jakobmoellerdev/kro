@@ -24,7 +24,7 @@ import (
 	"k8s.io/kube-openapi/pkg/validation/spec"
 
 	expv1alpha1 "github.com/kubernetes-sigs/kro/api/v1alpha1"
-	"github.com/kubernetes-sigs/kro/pkg/graphengine/compiler/fieldpath"
+	"github.com/kubernetes-sigs/kro/pkg/graph/fieldpath"
 	"github.com/kubernetes-sigs/kro/pkg/graphengine/compiler/schema"
 	"github.com/kubernetes-sigs/kro/pkg/graphengine/compiler/variable"
 	"github.com/kubernetes-sigs/kro/pkg/graphengine/testutil/generator"
