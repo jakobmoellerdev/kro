@@ -33,10 +33,10 @@ import (
 	expv1alpha1 "github.com/kubernetes-sigs/kro/api/v1alpha1"
 	"github.com/kubernetes-sigs/kro/pkg/graphengine/compiler"
 	"github.com/kubernetes-sigs/kro/pkg/graphengine/executor"
-	"github.com/kubernetes-sigs/kro/pkg/graphengine/metadata"
 	"github.com/kubernetes-sigs/kro/pkg/graphengine/registry"
 	krotruntime "github.com/kubernetes-sigs/kro/pkg/graphengine/runtime"
 	"github.com/kubernetes-sigs/kro/pkg/graphengine/watchrouter"
+	"github.com/kubernetes-sigs/kro/pkg/metadata"
 )
 
 // fakeExecutor lets reconciler tests opt into apply/delete failures.
