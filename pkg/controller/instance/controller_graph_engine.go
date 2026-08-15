@@ -22,10 +22,14 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sort"
+	"strconv"
 
+	"github.com/go-logr/logr"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/sets"
 	"k8s.io/client-go/dynamic"
 
@@ -168,18 +172,22 @@ func (c *Controller) reconcileViaGraphEngine(
 	case errors.Is(applyErr, executor.ErrNotReady):
 		// Soft: a node is waiting on data/readiness. State stays InProgress;
 		// child watch events (and the requeue below) drive the next cycle.
-		mark.ResourcesNotReady("awaiting resource readiness: %v", applyErr)
+		mark.ResourcesNotReady("waiting for unresolved resource: %v", applyErr)
 	default:
 		hardErr = true
 		mark.ResourcesNotReady("resource reconciliation failed: %v", applyErr)
 	}
 
-	// Stamp the full ApplySet inventory (parent-id label + tooling + GKs +
-	// additional-namespaces + recomputed hash) on the instance so the
-	// deletion path's ValidateParentInventory stays consistent and prune
-	// can discover managed members.
-	if invErr := c.patchApplySetInventory(ctx, inst, applyResult.Applied); invErr != nil {
-		log.V(1).Info("graph-engine: ApplySet inventory patch failed (non-fatal)", "error", invErr)
+	// Reconcile the ApplySet inventory and prune orphans.  The inventory
+	// grows to the union of the newly-applied set and the prior parent memory
+	// (it never shrinks on a not-ready/degraded cycle, so the deletion path
+	// keeps finding managed members).  Only when the desired set is fully
+	// resolved and apply had no hard error do we prune resources that left the
+	// desired set, then shrink the inventory to the current set after a
+	// conflict-free prune.
+	fullyResolved := applyErr == nil && len(applyResult.Unresolved) == 0
+	if invErr := c.reconcileApplySetInventory(ctx, log, inst, applyResult.Applied, fullyResolved); invErr != nil {
+		log.V(1).Info("graph-engine: ApplySet inventory/prune failed (non-fatal)", "error", invErr)
 	}
 
 	//------------------------------------------------------------------
@@ -217,14 +225,78 @@ func (c *Controller) reconcileViaRuntimeFallback(_ context.Context, _ *unstructu
 	)
 }
 
-// patchApplySetInventory writes the complete ApplySet inventory metadata on
-// the instance to reflect the resources the graph engine just applied. It
-// mirrors the old path's patchInstanceWithApplySetMetadata: all four KEP-3659
-// annotations (tooling, contains-group-kinds, additional-namespaces, and the
-// inventory hash) are written together so they stay mutually consistent —
-// writing group-kinds without recomputing the hash would fail
-// ValidateParentInventory and wedge deletion.
-func (c *Controller) patchApplySetInventory(ctx context.Context, inst *unstructured.Unstructured, applied []v1alpha1.ManagedResource) error {
+// reconcileApplySetInventory writes the ApplySet inventory metadata on the
+// instance and prunes resources that left the desired set.
+//
+// The inventory is written as the UNION of the newly-applied group-kinds/
+// namespaces and the prior parent "memory" (the values already recorded in the
+// instance's ApplySet annotations).  Mirroring applyset.Project, this union
+// guarantees the inventory never shrinks on a not-ready/degraded cycle — which
+// is what keeps the deletion path from finding zero managed resources and
+// orphaning children when a dependent is transiently withheld.
+//
+// Pruning is gated on fullyResolved (applyErr == nil && no Unresolved nodes):
+// we must never prune while anything is unresolved, or we would delete
+// still-wanted members that were merely omitted from Applied this cycle.  Only
+// after a conflict-free prune that actually removed orphans do we shrink the
+// inventory to the exact current set, mirroring classic pruneOrphans.
+func (c *Controller) reconcileApplySetInventory(
+	ctx context.Context,
+	log logr.Logger,
+	inst *unstructured.Unstructured,
+	applied []v1alpha1.ManagedResource,
+	fullyResolved bool,
+) error {
+	// Construct the ApplySet from the instance BEFORE overwriting its inventory
+	// annotations so the prior parent memory is captured for the prune scope
+	// union (applyset.New clones parent.GetAnnotations()).
+	applier := applyset.New(applyset.Config{
+		Client:          c.client.Dynamic(),
+		RESTMapper:      c.client.RESTMapper(),
+		Log:             log,
+		ParentNamespace: inst.GetNamespace(),
+	}, inst)
+
+	batchMeta := applySetMetadataFromApplied(inst, applied)
+
+	// Superset = union(batch GKs/namespaces, prior parent annotations).
+	// applyset.Project performs exactly this union (batch + parent memory).
+	supersetMeta, projErr := applier.Project(managedResourcesToResources(applied))
+	if projErr != nil {
+		// Cannot compute the union safely; keep the prior annotations rather
+		// than risk shrinking the inventory, and skip prune this cycle.
+		log.V(1).Info("graph-engine: applyset project failed; keeping prior inventory", "error", projErr)
+		return nil
+	}
+
+	// 1. Grow (never shrink) the inventory to the superset.
+	if err := c.patchInstanceApplySetMetadata(ctx, inst, supersetMeta); err != nil {
+		return fmt.Errorf("patch superset inventory: %w", err)
+	}
+
+	// 2. Prune only when the desired set is fully resolved.
+	if !fullyResolved {
+		return nil
+	}
+	pruned, conflictFree, err := c.pruneGraphEngineOrphans(ctx, log, applier, applied, supersetMeta)
+	if err != nil {
+		return err
+	}
+
+	// 3. Shrink the inventory to the exact current set only after a
+	//    conflict-free prune that actually removed orphans.
+	if pruned && conflictFree {
+		if err := c.patchInstanceApplySetMetadata(ctx, inst, batchMeta); err != nil {
+			log.V(1).Info("graph-engine: failed to shrink inventory after prune", "error", err)
+		}
+	}
+	return nil
+}
+
+// applySetMetadataFromApplied builds ApplySet inventory metadata from only the
+// resources applied this cycle (the "batch" set), excluding the parent
+// namespace from AdditionalNamespaces per KEP-3659.
+func applySetMetadataFromApplied(inst *unstructured.Unstructured, applied []v1alpha1.ManagedResource) applyset.Metadata {
 	meta := applyset.Metadata{
 		ID:                   applyset.ID(inst),
 		Tooling:              applyset.ToolingID(),
@@ -243,7 +315,104 @@ func (c *Controller) patchApplySetInventory(ctx context.Context, inst *unstructu
 			meta.AdditionalNamespaces.Insert(r.Namespace)
 		}
 	}
+	return meta
+}
 
+// managedResourcesToResources reconstructs minimal applyset.Resource inputs
+// (GVK + namespace + name) from the executor's ManagedResource records so
+// applyset.Project can compute the union scope.  UID/status are not needed for
+// projection.
+func managedResourcesToResources(applied []v1alpha1.ManagedResource) []applyset.Resource {
+	out := make([]applyset.Resource, 0, len(applied))
+	for _, r := range applied {
+		obj := &unstructured.Unstructured{}
+		obj.SetAPIVersion(r.APIVersion)
+		obj.SetKind(r.Kind)
+		obj.SetNamespace(r.Namespace)
+		obj.SetName(r.Name)
+		out = append(out, applyset.Resource{ID: r.NodeID, Object: obj})
+	}
+	return out
+}
+
+// pruneGraphEngineOrphans discovers applyset members not in the applied set and
+// deletes them in reverse apply-order (dependents before dependencies).  It
+// returns whether any orphan was actually removed and whether the prune was
+// free of UID conflicts.  NotFound and UID-conflict deletes are tolerated by
+// DeleteOrphan; a conflict leaves the object in place and is reported so the
+// caller keeps the superset inventory for a later retry.
+func (c *Controller) pruneGraphEngineOrphans(
+	ctx context.Context,
+	log logr.Logger,
+	applier *applyset.ApplySet,
+	applied []v1alpha1.ManagedResource,
+	supersetMeta applyset.Metadata,
+) (pruned bool, conflictFree bool, err error) {
+	keepUIDs := sets.New[types.UID]()
+	for _, r := range applied {
+		if r.UID != "" {
+			keepUIDs.Insert(types.UID(r.UID))
+		}
+	}
+
+	candidates, err := applier.ListOrphans(ctx, applyset.PruneOptions{
+		KeepUIDs: keepUIDs,
+		Scope:    supersetMeta.PruneScope(),
+	})
+	if err != nil {
+		return false, false, fmt.Errorf("list orphans: %w", err)
+	}
+	if len(candidates) == 0 {
+		return false, true, nil
+	}
+
+	// Delete dependents before dependencies: sort by the persisted apply-order
+	// annotation descending.  Unmapped/invalid orders sort first (treated as
+	// the highest wave), matching classic prune's handling of nodes removed
+	// from the graph entirely.
+	sort.SliceStable(candidates, func(i, j int) bool {
+		return orphanApplyOrder(candidates[i]) > orphanApplyOrder(candidates[j])
+	})
+
+	conflicts := 0
+	for _, candidate := range candidates {
+		res, derr := applier.DeleteOrphan(ctx, candidate)
+		if derr != nil {
+			return pruned, false, fmt.Errorf("delete orphan: %w", derr)
+		}
+		if res.Pruned != nil {
+			pruned = true
+		}
+		if res.Conflict {
+			conflicts++
+		}
+	}
+	if conflicts > 0 {
+		log.V(1).Info("graph-engine: prune skipped resources due to UID conflicts; keeping superset inventory", "conflicts", conflicts)
+		return pruned, false, nil
+	}
+	return pruned, true, nil
+}
+
+// orphanApplyOrder reads the persisted reverse-topological apply-order wave for
+// an orphan candidate.  Missing/invalid orders return max int so unmapped
+// resources (whose node was removed from the graph) are deleted first.
+func orphanApplyOrder(candidate applyset.OrphanCandidate) int {
+	raw := candidate.Object.GetAnnotations()[metadata.ApplyOrderAnnotation]
+	order, err := strconv.Atoi(raw)
+	if err != nil {
+		return int(^uint(0) >> 1)
+	}
+	return order
+}
+
+// patchInstanceApplySetMetadata writes the supplied ApplySet inventory metadata
+// on the instance.  All four KEP-3659 annotations (tooling, contains-group-
+// kinds, additional-namespaces, and the inventory hash) plus the parent-id
+// label are written together so they stay mutually consistent — writing
+// group-kinds without recomputing the hash would fail ValidateParentInventory
+// and wedge deletion.
+func (c *Controller) patchInstanceApplySetMetadata(ctx context.Context, inst *unstructured.Unstructured, meta applyset.Metadata) error {
 	wantLabels := meta.Labels()
 	wantAnnotations := meta.Annotations()
 
