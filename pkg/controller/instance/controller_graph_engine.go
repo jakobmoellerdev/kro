@@ -20,16 +20,14 @@ package instance
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
-	"sort"
-	"strings"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
-	"k8s.io/client-go/util/retry"
+	"k8s.io/apimachinery/pkg/util/sets"
+	"k8s.io/client-go/dynamic"
 
 	"github.com/kubernetes-sigs/kro/api/v1alpha1"
 	"github.com/kubernetes-sigs/kro/pkg/controller/instance/applyset"
@@ -37,6 +35,7 @@ import (
 	"github.com/kubernetes-sigs/kro/pkg/graph/revisions"
 	"github.com/kubernetes-sigs/kro/pkg/graphengine/executor"
 	"github.com/kubernetes-sigs/kro/pkg/graphengine/rgdadapter"
+	geruntime "github.com/kubernetes-sigs/kro/pkg/graphengine/runtime"
 	"github.com/kubernetes-sigs/kro/pkg/graphengine/watchrouter"
 	"github.com/kubernetes-sigs/kro/pkg/metadata"
 	"github.com/kubernetes-sigs/kro/pkg/requeue"
@@ -121,6 +120,12 @@ func (c *Controller) reconcileViaGraphEngine(
 		inst = patched
 	}
 
+	// Snapshot wire status BEFORE the marker writes built-in defaults, and
+	// build the condition marker on the (possibly rebound) instance.
+	wireStatus := captureWireStatus(inst)
+	mark := NewConditionsMarkerFor(inst)
+	mark.InstanceManaged()
+
 	//------------------------------------------------------------------
 	// 3. Build per-reconcile Runtime
 	//------------------------------------------------------------------
@@ -128,11 +133,11 @@ func (c *Controller) reconcileViaGraphEngine(
 	if err != nil {
 		log.Error(err, "graph-engine: BuildRuntimeForInstance failed")
 		// Mark the instance so the operator can see the build failure.
-		mark := NewConditionsMarkerFor(inst)
 		mark.GraphResolutionFailed("graph-engine build failed: %v", err)
 		_ = c.updateConditionsStatus(ctx, inst)
 		return err
 	}
+	mark.GraphResolved()
 
 	//------------------------------------------------------------------
 	// 4. Apply through the executor (SSA + watches)
@@ -140,9 +145,12 @@ func (c *Controller) reconcileViaGraphEngine(
 	// Build a per-reconcile child labeler: instance labels + applyset part-of
 	// + struct-level KRO-meta labels are composed inside ApplyWithLabeler.
 	instanceLabeler := metadata.NewInstanceLabeler(inst, c.namespaced)
+	nodeLabeler := metadata.NewNodeLabeler()
 	applysetPartOf := applyset.ID(inst)
 	extraLabel := func(obj *unstructured.Unstructured) {
 		instanceLabeler.ApplyLabels(obj)
+		// app.kubernetes.io/managed-by=kro, matching the classic child labeler.
+		nodeLabeler.ApplyLabels(obj)
 		l := obj.GetLabels()
 		if l == nil {
 			l = map[string]string{}
@@ -153,44 +161,45 @@ func (c *Controller) reconcileViaGraphEngine(
 	bridge := &instanceWatcherBridge{w: dcWatcher}
 	applyResult, applyErr := c.graphEngineExecutor.ApplyWithLabeler(ctx, rt, bridge, extraLabel)
 
-	// Record managed resources on the instance status regardless of soft error.
-	// Hard errors abort before status patching.
-	if applyErr != nil {
-		// Check if it's a soft "not ready" error from executor; if so we still
-		// want to project partial status so the instance shows InProgress.
-		log.V(1).Info("graph-engine: Apply returned error (may be soft)", "error", applyErr)
+	hardErr := false
+	switch {
+	case applyErr == nil:
+		mark.ResourcesReady()
+	case errors.Is(applyErr, executor.ErrNotReady):
+		// Soft: a node is waiting on data/readiness. State stays InProgress;
+		// child watch events (and the requeue below) drive the next cycle.
+		mark.ResourcesNotReady("awaiting resource readiness: %v", applyErr)
+	default:
+		hardErr = true
+		mark.ResourcesNotReady("resource reconciliation failed: %v", applyErr)
 	}
 
-	// Stamp the ApplySet contains-group-kinds annotation on the instance so
-	// ApplySet inventory stays correct (needed by deletion and compat tests).
-	if gkErr := c.patchApplySetGKs(ctx, inst, applyResult.Applied); gkErr != nil {
-		log.V(1).Info("graph-engine: ApplySet GKs patch failed (non-fatal)", "error", gkErr)
+	// Stamp the full ApplySet inventory (parent-id label + tooling + GKs +
+	// additional-namespaces + recomputed hash) on the instance so the
+	// deletion path's ValidateParentInventory stays consistent and prune
+	// can discover managed members.
+	if invErr := c.patchApplySetInventory(ctx, inst, applyResult.Applied); invErr != nil {
+		log.V(1).Info("graph-engine: ApplySet inventory patch failed (non-fatal)", "error", invErr)
 	}
 
 	//------------------------------------------------------------------
-	// 5. Project and patch instance status
+	// 5. Project status fields and persist the full status (built-in
+	//    conditions + projected fields + author conditions), skip-write
+	//    guarded by statusesMatch.
 	//------------------------------------------------------------------
 	statusFields, projErr := rgdadapter.ProjectInstanceStatus(rt, rgd)
 	if projErr != nil {
 		log.Error(projErr, "graph-engine: status projection failed")
-		// Non-fatal: update conditions only
+	}
+	degraded := hardErr || projErr != nil
+
+	if err := c.persistGraphEngineStatus(ctx, inst, wireStatus, statusFields, rt, rgd, degraded); err != nil {
+		log.Error(err, "graph-engine: status persist failed")
+		return err
 	}
 
-	conditions, condErr := rgdadapter.ProjectInstanceConditions(rt, rgd)
-	if condErr != nil {
-		log.V(1).Info("graph-engine: condition projection failed (non-fatal)", "error", condErr)
-	}
-
-	patchErr := c.patchGraphEngineStatus(ctx, inst, statusFields, conditions, applyErr)
-	if patchErr != nil {
-		log.Error(patchErr, "graph-engine: status patch failed")
-		return patchErr
-	}
-
-	// Return the apply error last so controller-runtime requeues if needed.
 	// Classify soft-not-ready as a requeue (like the old path with
-	// runtime.ErrWaitingForReadiness) instead of a hard reconcile failure —
-	// the executor signals "upstream not ready yet, retry" with ErrNotReady.
+	// runtime.ErrWaitingForReadiness) instead of a hard reconcile failure.
 	if applyErr != nil && errors.Is(applyErr, executor.ErrNotReady) {
 		return requeue.NeededAfter(applyErr, c.reconcileConfig.DefaultRequeueDuration)
 	}
@@ -208,51 +217,49 @@ func (c *Controller) reconcileViaRuntimeFallback(_ context.Context, _ *unstructu
 	)
 }
 
-// patchApplySetGKs updates the ApplySet contains-group-kinds annotation on the
-// instance to reflect the set of GKs that the graph engine just applied.
-// It mirrors the patchInstanceWithApplySetMetadata logic from the old path.
-func (c *Controller) patchApplySetGKs(ctx context.Context, inst *unstructured.Unstructured, applied []v1alpha1.ManagedResource) error {
-	// Collect unique GKs from the applied resources.
-	gkSet := make(map[schema.GroupKind]struct{}, len(applied))
+// patchApplySetInventory writes the complete ApplySet inventory metadata on
+// the instance to reflect the resources the graph engine just applied. It
+// mirrors the old path's patchInstanceWithApplySetMetadata: all four KEP-3659
+// annotations (tooling, contains-group-kinds, additional-namespaces, and the
+// inventory hash) are written together so they stay mutually consistent —
+// writing group-kinds without recomputing the hash would fail
+// ValidateParentInventory and wedge deletion.
+func (c *Controller) patchApplySetInventory(ctx context.Context, inst *unstructured.Unstructured, applied []v1alpha1.ManagedResource) error {
+	meta := applyset.Metadata{
+		ID:                   applyset.ID(inst),
+		Tooling:              applyset.ToolingID(),
+		GroupKinds:           sets.New[schema.GroupKind](),
+		AdditionalNamespaces: sets.New[string](),
+	}
+	parentNS := inst.GetNamespace()
 	for _, r := range applied {
 		gv, err := schema.ParseGroupVersion(r.APIVersion)
 		if err != nil {
 			continue
 		}
-		gkSet[schema.GroupKind{Group: gv.Group, Kind: r.Kind}] = struct{}{}
-	}
-
-	// Build KEP-3659 annotation value: "Kind" for core, "Kind.group" otherwise.
-	gkStrings := make([]string, 0, len(gkSet))
-	for gk := range gkSet {
-		if gk.Group == "" {
-			gkStrings = append(gkStrings, gk.Kind)
-		} else {
-			gkStrings = append(gkStrings, fmt.Sprintf("%s.%s", gk.Kind, gk.Group))
+		meta.GroupKinds.Insert(schema.GroupKind{Group: gv.Group, Kind: r.Kind})
+		// AdditionalNamespaces excludes the parent namespace per KEP-3659.
+		if r.Namespace != "" && r.Namespace != parentNS {
+			meta.AdditionalNamespaces.Insert(r.Namespace)
 		}
 	}
-	sort.Strings(gkStrings)
-	gksValue := strings.Join(gkStrings, ",")
 
-	// Fast-path: if annotation is already correct, skip the write.
-	if inst.GetAnnotations()[applyset.ApplySetGKsAnnotation] == gksValue {
+	wantLabels := meta.Labels()
+	wantAnnotations := meta.Annotations()
+
+	// Fast-path: skip the write when the inventory is already correct.
+	if inventoryUpToDate(inst, wantLabels, wantAnnotations) {
 		return nil
 	}
 
 	patchObj := instanceSSAPatch(inst)
-	anns := map[string]string{
-		applyset.ApplySetGKsAnnotation: gksValue,
-	}
-	patchObj.SetAnnotations(anns)
+	patchObj.SetLabels(wantLabels)
+	patchObj.SetAnnotations(wantAnnotations)
 
 	ri := c.client.Dynamic().Resource(c.gvr)
-	var instClient interface {
-		Apply(context.Context, string, *unstructured.Unstructured, metav1.ApplyOptions, ...string) (*unstructured.Unstructured, error)
-	}
+	var instClient dynamic.ResourceInterface = ri
 	if c.namespaced {
 		instClient = ri.Namespace(inst.GetNamespace())
-	} else {
-		instClient = ri
 	}
 	_, err := instClient.Apply(ctx, inst.GetName(), patchObj, metav1.ApplyOptions{
 		FieldManager: applyset.FieldManager + "-parent",
@@ -261,82 +268,91 @@ func (c *Controller) patchApplySetGKs(ctx context.Context, inst *unstructured.Un
 	return err
 }
 
-// patchGraphEngineStatus writes the projected status map and conditions onto
-// the instance using a plain UpdateStatus call (same pattern as persistStatus).
-func (c *Controller) patchGraphEngineStatus(
+// inventoryUpToDate reports whether inst already carries every supplied
+// ApplySet label/annotation with the same value.
+func inventoryUpToDate(inst *unstructured.Unstructured, wantLabels, wantAnnotations map[string]string) bool {
+	haveLabels := inst.GetLabels()
+	for k, v := range wantLabels {
+		if haveLabels[k] != v {
+			return false
+		}
+	}
+	haveAnnotations := inst.GetAnnotations()
+	for k, v := range wantAnnotations {
+		if haveAnnotations[k] != v {
+			return false
+		}
+	}
+	return true
+}
+
+// persistGraphEngineStatus composes the wire status for the Graph-engine path
+// and persists it through persistStatus, reusing statusesMatch skip-write and
+// state-transition metrics. It mirrors updateStatus: built-in conditions and
+// state come from the marker-mutated instance, projected fields merge in, and
+// author conditions (when the RGD declares them) replace the built-ins after
+// stamping and merging with the previous cycle.
+//
+// statusFields == nil preserves the non-condition/state fields already on the
+// wire. degraded forces state=Error regardless of condition readiness.
+func (c *Controller) persistGraphEngineStatus(
 	ctx context.Context,
 	inst *unstructured.Unstructured,
+	wireStatus map[string]interface{},
 	statusFields map[string]any,
-	conditions []metav1.Condition,
-	applyErr error,
+	rt *geruntime.Runtime,
+	rgd *v1alpha1.ResourceGraphDefinition,
+	degraded bool,
 ) error {
-	ri := c.client.Dynamic().Resource(c.gvr)
+	previousState, _ := wireStatus["state"].(string)
 
-	return retry.RetryOnConflict(retry.DefaultRetry, func() error {
-		var cur *unstructured.Unstructured
-		var err error
-		if c.namespaced {
-			cur, err = ri.Namespace(inst.GetNamespace()).Get(ctx, inst.GetName(), metav1.GetOptions{})
-		} else {
-			cur, err = ri.Get(ctx, inst.GetName(), metav1.GetOptions{})
+	status := map[string]interface{}{}
+	if statusFields == nil {
+		for k, v := range wireStatus {
+			if k != "conditions" && k != "state" {
+				status[k] = v
+			}
 		}
-		if err != nil {
-			return err
-		}
-
-		status, _, _ := unstructured.NestedMap(cur.Object, "status")
-		if status == nil {
-			status = map[string]any{}
-		}
-
-		// Write projected fields.
+	} else {
 		for k, v := range statusFields {
 			status[k] = v
 		}
-
-		// State: Active when no apply error, InProgress otherwise.
-		if applyErr != nil {
-			status["state"] = string(v1alpha1.InstanceStateInProgress)
-		} else {
-			status["state"] = string(v1alpha1.InstanceStateActive)
-		}
-
-		// Conditions from author CEL block.
-		if len(conditions) > 0 {
-			raw := make([]interface{}, 0, len(conditions))
-			for _, cond := range conditions {
-				m, e := conditionToMap(cond)
-				if e == nil {
-					raw = append(raw, m)
-				}
-			}
-			status["conditions"] = raw
-		}
-
-		cur.Object["status"] = status
-		inst.Object["status"] = status
-
-		if c.namespaced {
-			_, err = ri.Namespace(inst.GetNamespace()).UpdateStatus(ctx, cur, metav1.UpdateOptions{})
-		} else {
-			_, err = ri.UpdateStatus(ctx, cur, metav1.UpdateOptions{})
-		}
-		return err
-	})
-}
-
-// conditionToMap converts a metav1.Condition to a plain map for unstructured
-// storage.  Uses JSON round-trip for correctness.
-func conditionToMap(cond metav1.Condition) (map[string]interface{}, error) {
-	b, err := json.Marshal(cond)
-	if err != nil {
-		return nil, err
 	}
-	var m map[string]interface{}
-	if err := json.Unmarshal(b, &m); err != nil {
-		return nil, err
+
+	builtins := builtinConditions(inst)
+	status["conditions"] = conditionsToInterfaceSlice(builtins)
+
+	cs := condSet.For(&unstructuredWrapper{inst})
+	switch {
+	case degraded:
+		status["state"] = string(v1alpha1.InstanceStateError)
+	case cs.IsRootReady():
+		status["state"] = string(v1alpha1.InstanceStateActive)
+	default:
+		status["state"] = string(v1alpha1.InstanceStateInProgress)
 	}
-	return m, nil
+
+	if c.reconcileConfig.HasAuthorConditions {
+		authored, incomplete, condErr := rgdadapter.ProjectInstanceConditions(rt, rgd, builtins)
+		prev, _ := wireStatus["conditions"].([]interface{})
+		previous := decodeConditions(prev)
+		stamped := stampAuthorConditions(authored, previous, inst.GetGeneration())
+		if incomplete {
+			stamped = mergeWithPrevious(stamped, previous)
+		}
+		status["conditions"] = conditionsToInterfaceSlice(stamped)
+		if condErr != nil {
+			c.log.Error(condErr, "graph-engine: author conditions degraded; setting state=Error")
+			status["state"] = string(v1alpha1.InstanceStateError)
+		}
+	}
+
+	ri := c.client.Dynamic().Resource(c.gvr)
+	var instanceClient dynamic.ResourceInterface = ri
+	if c.namespaced {
+		instanceClient = ri.Namespace(inst.GetNamespace())
+	}
+	return c.persistStatus(ctx, instanceClient, inst, wireStatus, status, previousState)
 }
 
 // instanceWatcherBridge adapts a dynamiccontroller.InstanceWatcher to the
@@ -353,6 +369,7 @@ func (b *instanceWatcherBridge) Watch(req watchrouter.WatchRequest) error {
 		GVR:       req.GVR,
 		Name:      req.Name,
 		Namespace: req.Namespace,
+		Selector:  req.Selector,
 	})
 }
 

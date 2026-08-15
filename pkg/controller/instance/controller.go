@@ -153,6 +153,9 @@ func NewController(
 	var exec *executor.Simple
 	if rgdOnGraph && graphEngineClient != nil {
 		exec = executor.NewSimple(graphEngineClient)
+		// RGD parity: gate dependents on upstream readyWhen (classic ordering).
+		// The generic Graph engine leaves this off.
+		exec.GateReadiness = true
 		if childResourceLabeler != nil {
 			lab := childResourceLabeler
 			exec.WithLabelInjector(func(obj *unstructured.Unstructured) {
