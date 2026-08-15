@@ -41,6 +41,13 @@ var ErrUnsupported = errors.New("executor: node kind not supported")
 // error — the user's spec is fine, the cluster just hasn't converged yet.
 var ErrNotReady = errors.New("executor: node not ready")
 
+// ErrResourceTerminating is returned when an applied resource has a non-zero
+// DeletionTimestamp on the server-side response. The reconciler treats this as
+// a soft "resource is being deleted, wait and retry" signal — downstream nodes
+// that depend on the terminating resource should not be applied until it
+// disappears and is recreated.
+var ErrResourceTerminating = errors.New("executor: resource is terminating")
+
 // ApplyResult records what an Apply call observed. The Reconciler uses
 // it to drive the prune set: Applied lists entries whose identities we
 // know this cycle; Unresolved lists NodeIDs whose Resolve hit data-

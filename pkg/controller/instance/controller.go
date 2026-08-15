@@ -262,6 +262,9 @@ func (c *Controller) Reconcile(ctx context.Context, req ctrl.Request) (err error
 	// Deletion must not depend on resolving the current GraphRevision or CEL.
 	// Build a context without a runtime and use persisted ApplySet inventory.
 	if inst.GetDeletionTimestamp() != nil {
+		// When RGDOnGraph is enabled, children were stamped with the correct
+		// ApplySet labels by reconcileViaGraphEngine, so the old ApplySet
+		// deletion path can discover and remove them cleanly.
 		dcx = NewDeletionContext(
 			ctx, log, c.gvr, c.namespaced, c.client.Dynamic(), c.client.RESTMapper(),
 			c.reconcileConfig, inst,

@@ -192,7 +192,27 @@ func (s *Simple) Apply(ctx context.Context, rt *runtime.Runtime, w watchrouter.W
 			}
 			n.SetObserved(desired, desired)
 			publishScope(rt, n, n.Observed())
-		case compiler.NodeKindRef, compiler.NodeKindWatch:
+		case compiler.NodeKindRef:
+			// Ref nodes fetch an existing cluster object by name/namespace.
+			// The compiled node carries the GVR, namespace, and name of the target.
+			fetched, fetchErr := s.fetchRef(ctx, rt, w, n)
+			if fetchErr != nil {
+				if isSoftRuntimeErr(fetchErr) {
+					result.Unresolved = append(result.Unresolved, n.ID())
+					recordSoft(fmt.Errorf("apply %q (%s): %w (%w)", n.ID(), n.Kind(), fetchErr, ErrNotReady))
+					continue
+				}
+				// NotFound is a soft requeue: the referenced object may not exist yet.
+				if apierrors.IsNotFound(fetchErr) {
+					result.Unresolved = append(result.Unresolved, n.ID())
+					recordSoft(fmt.Errorf("apply %q (%s): referenced object not found (%w)", n.ID(), n.Kind(), ErrNotReady))
+					continue
+				}
+				return result, fmt.Errorf("apply %q (%s): %w", n.ID(), n.Kind(), fetchErr)
+			}
+			n.SetObserved([]*unstructured.Unstructured{fetched}, []*unstructured.Unstructured{fetched})
+			publishScope(rt, n, n.Observed())
+		case compiler.NodeKindWatch:
 			return result, fmt.Errorf("apply %q (%s): %w", n.ID(), n.Kind(), ErrUnsupported)
 		default:
 			return result, fmt.Errorf("apply %q: unknown kind %v", n.ID(), n.Kind())
@@ -234,6 +254,37 @@ func managedResourceFrom(n *runtime.Node, obj *unstructured.Unstructured) expv1a
 // still gets its watches declared.
 func isSoftRuntimeErr(err error) bool {
 	return errors.Is(err, runtime.ErrDataPending) || errors.Is(err, runtime.ErrWaitingForReadiness)
+}
+
+// fetchRef fetches an existing cluster object for a Ref or Watch node.
+// It resolves the target identity from the compiled node object, registers
+// a watch so the reconciler stays notified of changes, and returns the
+// live object for scope publication.
+func (s *Simple) fetchRef(ctx context.Context, rt *runtime.Runtime, w watchrouter.Watcher, n *runtime.Node) (*unstructured.Unstructured, error) {
+	obj := n.Spec().Object.DeepCopy()
+
+	// Ref/Watch objects have no CEL expressions to resolve — the name and
+	// namespace are static literals baked in at compile time.
+	s.defaultNamespace(rt, n.Namespaced(), obj)
+
+	gvr, _, err := s.mappingFor(n, obj)
+	if err != nil {
+		return nil, err
+	}
+
+	if err := s.watchObject(w, n.ID(), gvr, obj); err != nil {
+		return nil, fmt.Errorf("register watch: %w", err)
+	}
+
+	fetched := &unstructured.Unstructured{}
+	fetched.SetGroupVersionKind(obj.GroupVersionKind())
+	if err := s.Client.Get(ctx, client.ObjectKey{
+		Name:      obj.GetName(),
+		Namespace: obj.GetNamespace(),
+	}, fetched); err != nil {
+		return nil, err
+	}
+	return fetched, nil
 }
 
 // publishScope writes the supplied objects back to the runtime scope.
@@ -338,6 +389,13 @@ func (s *Simple) applyTemplate(ctx context.Context, rt *runtime.Runtime, w watch
 		}
 		if err := s.ssaApply(ctx, obj); err != nil {
 			return applied, err
+		}
+		// If the server-side apply response shows the object has a DeletionTimestamp,
+		// it means the resource is being deleted. Treat this as a soft "terminating"
+		// signal so the reconciler can surface ResourceDeleting and block dependents.
+		if !obj.GetDeletionTimestamp().IsZero() {
+			return applied, fmt.Errorf("apply %q: resource \"%s/%s\" is terminating: %w",
+				n.ID(), obj.GetNamespace(), obj.GetName(), ErrResourceTerminating)
 		}
 		// SSA returned UID + server-managed fields on obj. Record the
 		// identity AFTER apply succeeded so we never advertise tracking

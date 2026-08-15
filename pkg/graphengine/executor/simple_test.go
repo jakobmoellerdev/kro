@@ -204,14 +204,15 @@ func TestSimple_Apply(t *testing.T) {
 			},
 		},
 		{
-			name: "ref node returns ErrUnsupported",
+			name: "ref node fetches object (NotFound becomes soft ErrNotReady)",
 			graph: generator.NewGraph("g",
 				generator.WithRef("existing", &expv1alpha1.ExternalRef{
 					APIVersion: "v1", Kind: "Pod",
 					Metadata: expv1alpha1.ExternalRefMetadata{Name: "p"},
 				}),
 			),
-			wantErr: ErrUnsupported.Error(),
+			// NotFound → soft requeue, no hard error
+			wantErr: ErrNotReady.Error(),
 		},
 		{
 			name: "watch node returns ErrUnsupported",

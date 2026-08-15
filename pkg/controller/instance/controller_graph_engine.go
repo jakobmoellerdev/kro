@@ -23,12 +23,11 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"sort"
-	"strings"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/apimachinery/pkg/util/sets"
 	"k8s.io/client-go/util/retry"
 
 	"github.com/kubernetes-sigs/kro/api/v1alpha1"
@@ -60,6 +59,8 @@ import (
 // Error policy mirrors the old path: hard errors propagate to controller-runtime
 // for requeue-with-backoff; ErrNotReady from the executor is a soft signal that
 // the call succeeds but the instance stays in InProgress.
+
+// reconcileViaGraphEngine is the Graph-engine reconcile path.
 func (c *Controller) reconcileViaGraphEngine(
 	ctx context.Context,
 	inst *unstructured.Unstructured,
@@ -70,6 +71,10 @@ func (c *Controller) reconcileViaGraphEngine(
 		"name", inst.GetName(),
 		"path", "graph-engine",
 	)
+
+	// Initialise the kro-builtin conditions marker.  Conditions are merged into
+	// the status patch at the end via patchGraphEngineStatus.
+	mark := NewConditionsMarkerFor(inst)
 
 	//------------------------------------------------------------------
 	// 1. Resolve RGD spec from the revision registry
@@ -127,12 +132,12 @@ func (c *Controller) reconcileViaGraphEngine(
 	rt, _, err := rgdadapter.BuildRuntimeForInstance(rgd, inst, c.graphEngineCompiler)
 	if err != nil {
 		log.Error(err, "graph-engine: BuildRuntimeForInstance failed")
-		// Mark the instance so the operator can see the build failure.
-		mark := NewConditionsMarkerFor(inst)
 		mark.GraphResolutionFailed("graph-engine build failed: %v", err)
 		_ = c.updateConditionsStatus(ctx, inst)
 		return err
 	}
+	mark.InstanceManaged()
+	mark.GraphResolved()
 
 	//------------------------------------------------------------------
 	// 4. Apply through the executor (SSA + watches)
@@ -153,12 +158,18 @@ func (c *Controller) reconcileViaGraphEngine(
 	bridge := &instanceWatcherBridge{w: dcWatcher}
 	applyResult, applyErr := c.graphEngineExecutor.ApplyWithLabeler(ctx, rt, bridge, extraLabel)
 
-	// Record managed resources on the instance status regardless of soft error.
-	// Hard errors abort before status patching.
-	if applyErr != nil {
-		// Check if it's a soft "not ready" error from executor; if so we still
-		// want to project partial status so the instance shows InProgress.
-		log.V(1).Info("graph-engine: Apply returned error (may be soft)", "error", applyErr)
+	// Set kro-builtin conditions based on apply outcome.
+	if applyErr == nil {
+		mark.ResourcesReady()
+	} else if errors.Is(applyErr, executor.ErrResourceTerminating) {
+		mark.ResourcesDeleting("resource is terminating: %v", applyErr)
+		log.V(1).Info("graph-engine: Apply returned terminating resource", "error", applyErr)
+	} else if errors.Is(applyErr, executor.ErrNotReady) {
+		mark.ResourcesNotReady("unresolved or awaiting readiness: %v", applyErr)
+		log.V(1).Info("graph-engine: Apply returned soft not-ready", "error", applyErr)
+	} else {
+		mark.ResourcesNotReady("resource reconciliation failed: %v", applyErr)
+		log.V(1).Info("graph-engine: Apply returned hard error", "error", applyErr)
 	}
 
 	// Stamp the ApplySet contains-group-kinds annotation on the instance so
@@ -181,21 +192,23 @@ func (c *Controller) reconcileViaGraphEngine(
 		log.V(1).Info("graph-engine: condition projection failed (non-fatal)", "error", condErr)
 	}
 
-	patchErr := c.patchGraphEngineStatus(ctx, inst, statusFields, conditions, applyErr)
+	patchErr := c.patchGraphEngineStatus(ctx, inst, statusFields, conditions, mark, applyErr)
 	if patchErr != nil {
 		log.Error(patchErr, "graph-engine: status patch failed")
 		return patchErr
 	}
 
 	// Return the apply error last so controller-runtime requeues if needed.
-	// Classify soft-not-ready as a requeue (like the old path with
-	// runtime.ErrWaitingForReadiness) instead of a hard reconcile failure —
-	// the executor signals "upstream not ready yet, retry" with ErrNotReady.
-	if applyErr != nil && errors.Is(applyErr, executor.ErrNotReady) {
+	// ErrNotReady and ErrResourceTerminating are both soft requeue signals.
+	if applyErr != nil && (errors.Is(applyErr, executor.ErrNotReady) || errors.Is(applyErr, executor.ErrResourceTerminating)) {
 		return requeue.NeededAfter(applyErr, c.reconcileConfig.DefaultRequeueDuration)
 	}
 	return applyErr
 }
+
+// managedResourcesToInterfaceSlice is reserved for future use when
+// managedResources needs to be persisted via a schema-registered field.
+// Currently unused — deletion uses the ApplySet inventory path.
 
 // reconcileViaRuntimeFallback is called when RGDOnGraph is on but the
 // revision entry pre-dates F6a (RGDSpec == nil).  It requeues so that once
@@ -208,42 +221,51 @@ func (c *Controller) reconcileViaRuntimeFallback(_ context.Context, _ *unstructu
 	)
 }
 
-// patchApplySetGKs updates the ApplySet contains-group-kinds annotation on the
-// instance to reflect the set of GKs that the graph engine just applied.
-// It mirrors the patchInstanceWithApplySetMetadata logic from the old path.
+// patchApplySetInventory updates the full ApplySet inventory metadata on the
+// instance to reflect the set of GKs and namespaces from the graph engine's
+// last apply.  It stamps all four required annotations (tooling, GKs,
+// additional-namespaces, inventory-hash) via applyset.Metadata so that the
+// deletion path's ValidateParentInventory check succeeds.
 func (c *Controller) patchApplySetGKs(ctx context.Context, inst *unstructured.Unstructured, applied []v1alpha1.ManagedResource) error {
-	// Collect unique GKs from the applied resources.
-	gkSet := make(map[schema.GroupKind]struct{}, len(applied))
+	// Collect unique GKs and child namespaces from the applied resources.
+	gkSet := sets.New[schema.GroupKind]()
+	nsSet := sets.New[string]()
+	instNS := inst.GetNamespace()
 	for _, r := range applied {
 		gv, err := schema.ParseGroupVersion(r.APIVersion)
 		if err != nil {
 			continue
 		}
-		gkSet[schema.GroupKind{Group: gv.Group, Kind: r.Kind}] = struct{}{}
-	}
-
-	// Build KEP-3659 annotation value: "Kind" for core, "Kind.group" otherwise.
-	gkStrings := make([]string, 0, len(gkSet))
-	for gk := range gkSet {
-		if gk.Group == "" {
-			gkStrings = append(gkStrings, gk.Kind)
-		} else {
-			gkStrings = append(gkStrings, fmt.Sprintf("%s.%s", gk.Kind, gk.Group))
+		gkSet.Insert(schema.GroupKind{Group: gv.Group, Kind: r.Kind})
+		if r.Namespace != "" && r.Namespace != instNS {
+			nsSet.Insert(r.Namespace)
 		}
 	}
-	sort.Strings(gkStrings)
-	gksValue := strings.Join(gkStrings, ",")
 
-	// Fast-path: if annotation is already correct, skip the write.
-	if inst.GetAnnotations()[applyset.ApplySetGKsAnnotation] == gksValue {
+	meta := applyset.Metadata{
+		ID:                   applyset.ID(inst),
+		Tooling:              applyset.ToolingID(),
+		GroupKinds:           gkSet,
+		AdditionalNamespaces: nsSet,
+	}
+
+	// Fast-path: if annotations are already correct, skip the write.
+	wantAnns := meta.Annotations()
+	currentAnns := inst.GetAnnotations()
+	changed := false
+	for k, v := range wantAnns {
+		if currentAnns[k] != v {
+			changed = true
+			break
+		}
+	}
+	if !changed {
 		return nil
 	}
 
 	patchObj := instanceSSAPatch(inst)
-	anns := map[string]string{
-		applyset.ApplySetGKsAnnotation: gksValue,
-	}
-	patchObj.SetAnnotations(anns)
+	patchObj.SetLabels(meta.Labels())
+	patchObj.SetAnnotations(meta.Annotations())
 
 	ri := c.client.Dynamic().Resource(c.gvr)
 	var instClient interface {
@@ -263,11 +285,13 @@ func (c *Controller) patchApplySetGKs(ctx context.Context, inst *unstructured.Un
 
 // patchGraphEngineStatus writes the projected status map and conditions onto
 // the instance using a plain UpdateStatus call (same pattern as persistStatus).
+// mark carries kro-builtin conditions which are merged with author conditions.
 func (c *Controller) patchGraphEngineStatus(
 	ctx context.Context,
 	inst *unstructured.Unstructured,
 	statusFields map[string]any,
-	conditions []metav1.Condition,
+	authorConditions []metav1.Condition,
+	mark *ConditionsMarker,
 	applyErr error,
 ) error {
 	ri := c.client.Dynamic().Resource(c.gvr)
@@ -301,16 +325,29 @@ func (c *Controller) patchGraphEngineStatus(
 			status["state"] = string(v1alpha1.InstanceStateActive)
 		}
 
-		// Conditions from author CEL block.
-		if len(conditions) > 0 {
-			raw := make([]interface{}, 0, len(conditions))
-			for _, cond := range conditions {
-				m, e := conditionToMap(cond)
+		// Merge kro-builtin conditions (from mark) with author-defined conditions.
+		// When the RGD declares no author conditions we only write builtins so
+		// the surface matches the old path.
+		builtins := builtinConditions(inst)
+		var allConds []v1alpha1.Condition
+		if len(authorConditions) > 0 {
+			// Start with builtins, then append author conditions (which may have
+			// different types; types are not de-duped since author conditions use
+			// custom type strings while builtins use kro's canonical types).
+			allConds = builtins
+			for _, ac := range authorConditions {
+				var v1cond v1alpha1.Condition
+				b, e := json.Marshal(ac)
 				if e == nil {
-					raw = append(raw, m)
+					_ = json.Unmarshal(b, &v1cond)
+					allConds = append(allConds, v1cond)
 				}
 			}
-			status["conditions"] = raw
+		} else {
+			allConds = builtins
+		}
+		if len(allConds) > 0 {
+			status["conditions"] = conditionsToInterfaceSlice(allConds)
 		}
 
 		cur.Object["status"] = status
