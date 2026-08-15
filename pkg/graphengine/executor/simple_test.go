@@ -511,6 +511,12 @@ type errClient struct {
 func (e *errClient) Patch(context.Context, client.Object, client.Patch, ...client.PatchOption) error {
 	return e.err
 }
+func (e *errClient) Get(context.Context, client.ObjectKey, client.Object, ...client.GetOption) error {
+	// applyTemplate GETs the live object before SSA to check for a
+	// terminating resource; surface the injected error here so the wrapped
+	// client error still propagates out of Apply.
+	return e.err
+}
 func (e *errClient) Delete(context.Context, client.Object, ...client.DeleteOption) error {
 	return e.err
 }

@@ -226,6 +226,18 @@ func (s *Simple) Apply(ctx context.Context, rt *runtime.Runtime, w watchrouter.W
 					recordSoft(fmt.Errorf("apply %q: %w (%w)", n.ID(), err, ErrNotReady))
 					continue
 				}
+				// A terminating live object (ResourceDeletingError) or a
+				// tolerated per-item collection failure surfaces as soft
+				// not-ready: record Unresolved so prune is withheld, remember
+				// the (possibly distinguishable) error, and continue so the
+				// node never reaches ready — gating its dependents — and its
+				// downstream watches still register. ResourceDeletingError
+				// satisfies errors.Is(err, ErrNotReady).
+				if errors.Is(err, ErrNotReady) {
+					result.Unresolved = append(result.Unresolved, n.ID())
+					recordSoft(fmt.Errorf("apply %q: %w", n.ID(), err))
+					continue
+				}
 				return result, fmt.Errorf("apply %q: %w", n.ID(), err)
 			}
 			n.SetObserved(desired, desired)
@@ -403,6 +415,22 @@ var errSchemaNotReady = errors.New("executor: target GVK not yet known to the cl
 // whose CRD isn't installed yet fails (errSchemaNotReady) before any
 // partial apply. Returns the resources that actually landed, even on a
 // later hard error, so the caller never loses tracking for them.
+//
+// Before SSA-applying each object the live object is fetched (mirroring
+// classic processRegularNode): if it exists with a deletionTimestamp the
+// node is held soft not-ready via ResourceDeletingError so its dependents
+// gate and the reconcile requeues without recreating a resource that is
+// still terminating. External refs/collections are exempt (they are
+// read-only and handled by applyRef/applyRefCollection, not here).
+//
+// Collection nodes apply each item INDEPENDENTLY and tolerate per-item SSA
+// failures (mirroring classic's applyset per-item apply): a failure to
+// UPDATE an already-present item (e.g. an immutable field) does not abort
+// the node — the live object is recorded as applied so tracking/prune stay
+// correct and the node can still converge. A failure to CREATE an item that
+// is not yet present marks the node soft not-ready so downstream gates and
+// the reconcile requeues. A scalar node still returns an SSA error as a hard
+// error, unchanged.
 func (s *Simple) applyTemplate(ctx context.Context, rt *runtime.Runtime, w watchrouter.Watcher, n *runtime.Node, desired []*unstructured.Unstructured) ([]expv1alpha1.ManagedResource, error) {
 	type mapping struct {
 		gvr        schema.GroupVersionResource
@@ -417,9 +445,12 @@ func (s *Simple) applyTemplate(ctx context.Context, rt *runtime.Runtime, w watch
 		mappings[i] = mapping{gvr: gvr, namespaced: namespaced}
 	}
 
+	isCollection := n.IsCollection()
 	applied := make([]expv1alpha1.ManagedResource, 0, len(desired))
 	size := len(desired)
 	collectionWatched := false
+	var deletingErr *ResourceDeletingError
+	var itemFailures []error
 	for i, obj := range desired {
 		s.defaultNamespace(rt, mappings[i].namespaced, obj)
 		stampKROMeta(rt, n, obj, i, size)
@@ -428,7 +459,7 @@ func (s *Simple) applyTemplate(ctx context.Context, rt *runtime.Runtime, w watch
 		// scalar watches — the coordinator keys state by NodeID, so per-item
 		// scalar watches would collapse to only the last item. Scalar nodes
 		// keep their per-object watch. Watches register before SSA apply.
-		if n.IsCollection() {
+		if isCollection {
 			if !collectionWatched {
 				if err := s.watchCollection(w, n, mappings[i].gvr, obj); err != nil {
 					return applied, fmt.Errorf("register collection watch: %w", err)
@@ -440,15 +471,82 @@ func (s *Simple) applyTemplate(ctx context.Context, rt *runtime.Runtime, w watch
 				return applied, fmt.Errorf("register watch: %w", err)
 			}
 		}
-		if err := s.ssaApply(ctx, obj); err != nil {
+
+		// Fetch the live object (classic parity): a hard GET error aborts,
+		// NotFound means the object is absent (current == nil).
+		current, err := s.getLive(ctx, obj)
+		if err != nil {
 			return applied, err
+		}
+		// Terminating: do not re-apply while the live object is being deleted.
+		if current != nil && current.GetDeletionTimestamp() != nil {
+			de := &ResourceDeletingError{NodeID: n.ID(), Namespace: obj.GetNamespace(), Name: obj.GetName()}
+			if !isCollection {
+				return applied, de
+			}
+			// Collection: a terminating item gates the whole node, but keep
+			// applying siblings so their watches/identities are recorded.
+			if deletingErr == nil {
+				deletingErr = de
+			}
+			continue
+		}
+
+		if err := s.ssaApply(ctx, obj); err != nil {
+			if !isCollection {
+				// Scalar Template: an SSA failure is a hard error, unchanged.
+				return applied, err
+			}
+			// Collection per-item tolerance (classic applyset parity).
+			if current != nil {
+				// The object already exists; only the UPDATE was rejected
+				// (e.g. an immutable field). It is present in the cluster, so
+				// record the live identity and let the node converge rather
+				// than block it forever on an unfixable update.
+				applied = append(applied, managedResourceFrom(n, current))
+				continue
+			}
+			// The object does not exist and CREATE failed: record the error
+			// and continue so siblings still apply; the node is held soft
+			// not-ready below.
+			itemFailures = append(itemFailures, fmt.Errorf("item %s/%s: %w", obj.GetNamespace(), obj.GetName(), err))
+			continue
 		}
 		// SSA returned UID + server-managed fields on obj. Record the
 		// identity AFTER apply succeeded so we never advertise tracking
 		// for resources that didn't actually land.
 		applied = append(applied, managedResourceFrom(n, obj))
 	}
+
+	// A terminating item takes priority: surface the ResourceDeleting signal
+	// so the reconciler marks the ResourcesReady condition accordingly.
+	if deletingErr != nil {
+		return applied, deletingErr
+	}
+	// Any create failure holds the collection soft not-ready so downstream
+	// gates and the reconcile requeues (never a hard abort).
+	if len(itemFailures) > 0 {
+		return applied, fmt.Errorf("collection %q: %d item(s) failed to apply: %w (%w)", n.ID(), len(itemFailures), errors.Join(itemFailures...), ErrNotReady)
+	}
 	return applied, nil
+}
+
+// getLive fetches the current cluster state of obj by GVK/namespace/name.
+// A NotFound is reported as (nil, nil) — the object is simply absent. Any
+// other error is returned so the caller can abort. Used to detect a
+// terminating object (deletionTimestamp) and to distinguish create-vs-update
+// failures for collection per-item apply tolerance.
+func (s *Simple) getLive(ctx context.Context, obj *unstructured.Unstructured) (*unstructured.Unstructured, error) {
+	live := &unstructured.Unstructured{}
+	live.SetGroupVersionKind(obj.GroupVersionKind())
+	key := client.ObjectKey{Namespace: obj.GetNamespace(), Name: obj.GetName()}
+	if err := s.Client.Get(ctx, key, live); err != nil {
+		if apierrors.IsNotFound(err) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("get current state for %s %q: %w", obj.GetKind(), key, err)
+	}
+	return live, nil
 }
 
 // stampKROMeta stamps the classic-runtime identity metadata the graph-engine
