@@ -47,9 +47,10 @@ func ResourceGraphDefinitionToGraph(rgd *v1alpha1.ResourceGraphDefinition) (*v1a
 	if rgd == nil {
 		return nil, fmt.Errorf("rgdadapter: resourcegraphdefinition is required")
 	}
-	if len(rgd.Spec.Resources) == 0 {
-		return nil, fmt.Errorf("rgdadapter: resourcegraphdefinition %q: at least one resource is required", rgd.Name)
-	}
+	// Zero resources is valid: a NoOp/arbitrary-object RGD manages no
+	// children and only projects status from its schema. The instance's
+	// `schema` def node (prepended by BuildRuntimeForInstance) keeps the
+	// compiled Graph non-empty, so the MinItems=1 Node constraint still holds.
 
 	g := &v1alpha1.Graph{}
 	g.SetGroupVersionKind(v1alpha1.GroupVersion.WithKind("Graph"))
@@ -122,11 +123,18 @@ func InstanceSchemaNode(instance *unstructured.Unstructured) (v1alpha1.Node, err
 	if instance == nil {
 		return v1alpha1.Node{}, fmt.Errorf("rgdadapter: instance is required")
 	}
-	val := map[string]any{
-		"metadata": map[string]any{
+	val := map[string]any{}
+	// Expose the instance's full metadata (uid, labels, annotations,
+	// generation, creationTimestamp, …) as ${schema.metadata.*}, matching
+	// the classic RGD runtime. Falling back to name/namespace only would
+	// break RGDs that reference e.g. ${schema.metadata.uid}.
+	if md, ok := instance.Object["metadata"].(map[string]any); ok {
+		val["metadata"] = md
+	} else {
+		val["metadata"] = map[string]any{
 			"name":      instance.GetName(),
 			"namespace": instance.GetNamespace(),
-		},
+		}
 	}
 	if spec, ok := instance.Object["spec"]; ok {
 		val["spec"] = spec

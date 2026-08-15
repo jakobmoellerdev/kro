@@ -40,6 +40,40 @@ func rawResource(m map[string]any) runtime.RawExtension {
 	return runtime.RawExtension{Raw: raw}
 }
 
+// TestBuildRuntimeForInstance_NoResources proves a NoOp/arbitrary-object RGD
+// (spec.resources: []) translates + compiles: the only node is the instance
+// `schema` def node, so the compiled Graph is non-empty and the executor has
+// nothing to apply. Regression guard for the e2e check-arbitrary-objects case.
+func TestBuildRuntimeForInstance_NoResources(t *testing.T) {
+	rgd := &v1alpha1.ResourceGraphDefinition{
+		ObjectMeta: metav1.ObjectMeta{Name: "noop"},
+		Spec: v1alpha1.ResourceGraphDefinitionSpec{
+			Schema: &v1alpha1.Schema{
+				APIVersion: "v1alpha1",
+				Kind:       "NoOp",
+				Spec:       runtime.RawExtension{Raw: []byte(`{"values":"object"}`)},
+			},
+			Resources: []*v1alpha1.Resource{},
+		},
+	}
+	instance := &unstructured.Unstructured{Object: map[string]any{
+		"apiVersion": "kro.run/v1alpha1",
+		"kind":       "NoOp",
+		"metadata":   map[string]any{"name": "demo", "namespace": "default"},
+		"spec":       map[string]any{"values": map[string]any{"foo": "bar"}},
+	}}
+
+	fakeResolver, disco := testk8s.NewFakeResolver()
+	rm := restmapper.NewDeferredDiscoveryRESTMapper(memory.NewMemCacheClient(disco))
+	c := compiler.NewCompilerWithDependencies(fakeResolver, rm)
+
+	rt, g, err := BuildRuntimeForInstance(rgd, instance, c)
+	require.NoError(t, err, "zero-resource RGD must translate + compile (schema node only)")
+	require.NotNil(t, rt)
+	require.Len(t, g.Spec.Nodes, 1)
+	assert.Equal(t, SchemaNodeID, g.Spec.Nodes[0].ID)
+}
+
 // TestReconcileParity_SchemaAndCrossNode is the F1 seam proof: an RGD with two
 // template resources — one reading the instance via ${schema.spec.*}, the other
 // reading the first via cross-node CEL — is translated to a Graph, the instance
