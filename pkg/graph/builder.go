@@ -759,6 +759,14 @@ func buildInstanceNode(
 	return instance, nil
 }
 
+// BuildInstanceSpecSchema converts an RGD Schema's SimpleSchema spec (and
+// optional custom types) into the OpenAPI JSONSchemaProps used to synthesize
+// the instance CRD. Exported so Graph-engine adapters can reuse the same
+// SimpleSchema → OpenAPI path without depending on unexported builder internals.
+func BuildInstanceSpecSchema(rgSchema *v1alpha1.Schema) (*extv1.JSONSchemaProps, error) {
+	return buildInstanceSpecSchema(rgSchema)
+}
+
 // buildInstanceSpecSchema builds the instance spec schema that will be
 // used to generate the CRD for the instance resource. The instance spec
 // schema is expected to be defined using the "SimpleSchema" format.
