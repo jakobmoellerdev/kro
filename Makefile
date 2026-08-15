@@ -212,7 +212,7 @@ CHAINSAW ?= $(LOCALBIN)/chainsaw
 KO_VERSION ?= v0.18.1
 KUSTOMIZE_VERSION ?= v5.8.0
 CONTROLLER_TOOLS_VERSION ?= v0.20.0
-CHAINSAW_VERSION ?= v0.2.14
+CHAINSAW_VERSION ?= v0.2.15
 
 .PHONY: chainsaw
 chainsaw: $(CHAINSAW) ## Download chainsaw locally if necessary. If wrong version is installed, it will be removed before downloading.
