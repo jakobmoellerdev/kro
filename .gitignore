@@ -46,7 +46,3 @@ node_modules/
 
 tools/lsp/client/out/
 manifests/rendered
-
-# Pix Agent
-.pi/
-.pi-lens/
