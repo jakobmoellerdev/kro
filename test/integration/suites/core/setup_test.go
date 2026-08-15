@@ -16,6 +16,7 @@ package core_test
 
 import (
 	"encoding/json"
+	"os"
 	"testing"
 	"time"
 
@@ -34,6 +35,14 @@ func TestCore(t *testing.T) {
 	// Enable alpha feature gates for integration test coverage.
 	if err := features.FeatureGate.Set("CELOmitFunction=true"); err != nil {
 		t.Fatalf("failed to enable CELOmitFunction feature gate: %v", err)
+	}
+	// RGD_ON_GRAPH=1 runs the core suite through the Graph-engine reconcile path
+	// (F6a probe) without modifying the default gate state.
+	if os.Getenv("RGD_ON_GRAPH") == "1" {
+		if err := features.FeatureGate.Set("RGDOnGraph=true"); err != nil {
+			t.Fatalf("failed to enable RGDOnGraph feature gate: %v", err)
+		}
+		t.Log("RGDOnGraph=true: routing reconciliation through Graph engine")
 	}
 
 	RegisterFailHandler(Fail)

@@ -39,8 +39,10 @@ import (
 	ctrlinstance "github.com/kubernetes-sigs/kro/pkg/controller/instance"
 	ctrlresourcegraphdefinition "github.com/kubernetes-sigs/kro/pkg/controller/resourcegraphdefinition"
 	"github.com/kubernetes-sigs/kro/pkg/dynamiccontroller"
+	"github.com/kubernetes-sigs/kro/pkg/features"
 	"github.com/kubernetes-sigs/kro/pkg/graph"
 	"github.com/kubernetes-sigs/kro/pkg/graph/revisions"
+	"github.com/kubernetes-sigs/kro/pkg/graphengine/compiler"
 )
 
 type Environment struct {
@@ -237,6 +239,15 @@ func (e *Environment) setupController() error {
 
 	if err = rgReconciler.SetupWithManager(e.CtrlManager); err != nil {
 		return fmt.Errorf("setting up reconciler: %w", err)
+	}
+	// When RGDOnGraph is enabled, inject the graph-engine compiler so that
+	// micro-controllers route instance reconciliation through the Graph engine.
+	if features.FeatureGate.Enabled(features.RGDOnGraph) {
+		geCmp, err := compiler.NewCompiler(e.ClientSet.RESTConfig(), e.ClientSet.HTTPClient())
+		if err != nil {
+			return fmt.Errorf("building graph-engine compiler for RGDOnGraph: %w", err)
+		}
+		rgReconciler.WithGraphEngineCompiler(geCmp)
 	}
 	if err = gvReconciler.SetupWithManager(e.CtrlManager); err != nil {
 		return fmt.Errorf("setting up graph revision reconciler: %w", err)
