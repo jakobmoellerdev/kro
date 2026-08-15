@@ -85,15 +85,23 @@ func resourceToNode(res *v1alpha1.Resource) (v1alpha1.Node, error) {
 			ForEach:     copyForEach(res.ForEach),
 		}, nil
 	case hasRef:
-		if res.ExternalRef.Metadata.Selector != nil {
-			return v1alpha1.Node{}, fmt.Errorf("%w: resource %q: externalRef collections (selector) are not mapped in F1", ErrUnsupported, res.ID)
-		}
-		if res.ExternalRef.Metadata.Name == "" {
+		// A selector externalRef is a read-only COLLECTION of external
+		// objects: name is absent (mutually exclusive with selector at the
+		// API level), and the compiler/executor treat the node as a
+		// collection. A single-object externalRef requires metadata.name.
+		isCollection := res.ExternalRef.Metadata.Selector != nil
+		if !isCollection && res.ExternalRef.Metadata.Name == "" {
 			return v1alpha1.Node{}, fmt.Errorf("%w: resource %q: externalRef is missing metadata.name", ErrUnsupported, res.ID)
 		}
 		if len(res.ForEach) > 0 {
 			return v1alpha1.Node{}, fmt.Errorf("%w: resource %q: forEach on externalRef is not mapped in F1", ErrUnsupported, res.ID)
 		}
+		// The ExternalRef (including a *metav1.LabelSelector under
+		// metadata.selector, with matchLabels + matchExpressions) is carried
+		// through verbatim into the Ref node. projectPayload converts it to
+		// unstructured, so CEL fragments inside matchExpressions[].values[]
+		// are parsed and rendered, and the executor can read the selector
+		// back off the resolved object.
 		return v1alpha1.Node{
 			ID:          res.ID,
 			Ref:         res.ExternalRef.DeepCopy(),

@@ -251,6 +251,10 @@ func (ctx *CompilationContext) buildNode(p *parser.Parser, n *expv1alpha1.Node, 
 		ForEach:     forEach,
 		IncludeWhen: includeWhen,
 		ReadyWhen:   readyWhen,
+		// A Ref whose payload carries metadata.selector is a read-only
+		// collection of external objects (list-by-selector), so it publishes
+		// a list into scope like a forEach collection.
+		Collection: kind == NodeKindRef && hasMetadataSelector(payload),
 	}, sch, nil
 }
 
@@ -329,6 +333,18 @@ func validateDynamicTemplateStructure(obj map[string]interface{}) error {
 		return fmt.Errorf("field \"metadata\" must be an object")
 	}
 	return nil
+}
+
+// hasMetadataSelector reports whether a projected payload carries a
+// metadata.selector object — the marker distinguishing a selector externalRef
+// (a read-only collection) from a single-object externalRef.
+func hasMetadataSelector(payload map[string]interface{}) bool {
+	md, ok := payload["metadata"].(map[string]interface{})
+	if !ok {
+		return false
+	}
+	_, ok = md["selector"]
+	return ok
 }
 
 // projectPayload converts the discriminated-union API node into a single

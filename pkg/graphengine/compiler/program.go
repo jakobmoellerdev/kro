@@ -111,6 +111,15 @@ type Node struct {
 	// is not a collection.
 	ForEach []ForEachDimension
 
+	// Collection marks a node that publishes a LIST into scope even though it
+	// has no forEach axes. Set for a selector externalRef (NodeKindRef whose
+	// payload carries metadata.selector): the node reads a read-only
+	// collection of external objects by label selector. It makes IsCollection
+	// report true so the schema wraps as a list and publishScope emits a
+	// []any, without reusing NodeKindWatch (whose map[string]string selector
+	// cannot express matchExpressions).
+	Collection bool
+
 	// IncludeWhen are compiled CEL conditions that all must evaluate true
 	// for the executor to apply this node. Empty means always included.
 	IncludeWhen []*krocel.Expression
@@ -130,9 +139,11 @@ type Node struct {
 	SubProgram *Program
 }
 
-// IsCollection reports whether this node expands into multiple instances.
+// IsCollection reports whether this node expands into multiple instances or
+// otherwise publishes a list into scope. True for forEach templates, Watch
+// nodes, and selector externalRefs (Collection).
 func (n *Node) IsCollection() bool {
-	return len(n.ForEach) > 0 || (n.Kind == NodeKindWatch)
+	return len(n.ForEach) > 0 || n.Kind == NodeKindWatch || n.Collection
 }
 
 // Program is the compiled IR for a v1alpha1.Graph. It carries the dependency
