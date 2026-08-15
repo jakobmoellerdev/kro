@@ -100,3 +100,18 @@ func (r *Registry) Len() int {
 	defer r.mu.RUnlock()
 	return len(r.entries)
 }
+
+// LastGood returns the most-recently stored Program and its hash for key,
+// regardless of whether that entry is still current. It is the fallback
+// path for last-good-config: when a new compile fails, callers can serve
+// the prior program while marking the RGD degraded.
+// Returns (nil, "", false) when no entry has ever been stored for key.
+func (r *Registry) LastGood(key types.NamespacedName) (*compiler.Program, string, bool) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	e, ok := r.entries[key]
+	if !ok {
+		return nil, "", false
+	}
+	return e.program, e.hash, true
+}
