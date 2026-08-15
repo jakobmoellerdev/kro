@@ -19,7 +19,7 @@ import (
 
 	"github.com/kubernetes-sigs/kro/pkg/cel/sentinels"
 	"github.com/kubernetes-sigs/kro/pkg/graph/fieldpath"
-	"github.com/kubernetes-sigs/kro/pkg/graphengine/compiler/variable"
+	"github.com/kubernetes-sigs/kro/pkg/graph/variable"
 )
 
 // ResolutionResult represents the result of resolving a single expression.

@@ -32,9 +32,9 @@ import (
 	krocel "github.com/kubernetes-sigs/kro/pkg/cel"
 	"github.com/kubernetes-sigs/kro/pkg/cel/ast"
 	"github.com/kubernetes-sigs/kro/pkg/graph/dag"
+	"github.com/kubernetes-sigs/kro/pkg/graph/variable"
 	"github.com/kubernetes-sigs/kro/pkg/graphengine/compiler/parser"
 	schemaresolver "github.com/kubernetes-sigs/kro/pkg/graphengine/compiler/schema/resolver"
-	"github.com/kubernetes-sigs/kro/pkg/graphengine/compiler/variable"
 )
 
 // Compiler turns a v1alpha1.Graph into a compiled Program. It owns the

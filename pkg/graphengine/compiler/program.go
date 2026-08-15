@@ -21,7 +21,7 @@ import (
 
 	krocel "github.com/kubernetes-sigs/kro/pkg/cel"
 	"github.com/kubernetes-sigs/kro/pkg/graph/dag"
-	"github.com/kubernetes-sigs/kro/pkg/graphengine/compiler/variable"
+	"github.com/kubernetes-sigs/kro/pkg/graph/variable"
 )
 
 // EachVarName is the CEL identifier bound to the current element during

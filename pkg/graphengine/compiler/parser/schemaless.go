@@ -19,7 +19,7 @@ import (
 	"strings"
 
 	krocel "github.com/kubernetes-sigs/kro/pkg/cel"
-	"github.com/kubernetes-sigs/kro/pkg/graphengine/compiler/variable"
+	"github.com/kubernetes-sigs/kro/pkg/graph/variable"
 )
 
 // ParseSchemalessResource extracts CEL expressions without a schema, this is useful

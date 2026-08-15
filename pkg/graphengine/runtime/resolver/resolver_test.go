@@ -23,7 +23,7 @@ import (
 
 	krocel "github.com/kubernetes-sigs/kro/pkg/cel"
 	"github.com/kubernetes-sigs/kro/pkg/cel/sentinels"
-	"github.com/kubernetes-sigs/kro/pkg/graphengine/compiler/variable"
+	"github.com/kubernetes-sigs/kro/pkg/graph/variable"
 )
 
 func TestGetValueFromPath(t *testing.T) {

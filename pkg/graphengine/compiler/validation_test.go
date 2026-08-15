@@ -22,7 +22,7 @@ import (
 
 	expv1alpha1 "github.com/kubernetes-sigs/kro/api/v1alpha1"
 	"github.com/kubernetes-sigs/kro/pkg/cel"
-	"github.com/kubernetes-sigs/kro/pkg/graphengine/compiler/variable"
+	"github.com/kubernetes-sigs/kro/pkg/graph/variable"
 )
 
 func TestValidateNodeID(t *testing.T) {
