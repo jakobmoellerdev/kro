@@ -31,8 +31,8 @@ import (
 	"github.com/kubernetes-sigs/kro/pkg/graphengine/compiler"
 	krotruntime "github.com/kubernetes-sigs/kro/pkg/graphengine/runtime"
 	"github.com/kubernetes-sigs/kro/pkg/graphengine/testutil/generator"
-	testk8s "github.com/kubernetes-sigs/kro/pkg/testutil/k8s"
 	"github.com/kubernetes-sigs/kro/pkg/graphengine/watchrouter"
+	testk8s "github.com/kubernetes-sigs/kro/pkg/testutil/k8s"
 )
 
 // emptyRuntime builds a Runtime over a trivial single-Def program so the

@@ -37,11 +37,11 @@ import (
 //     On success: Store in the registry and return (degraded=false).
 //  4. On compile failure:
 //     a. If a prior program exists for key (any hash — the last good revision),
-//        return THAT program with degraded=true and a non-nil err so the
-//        caller can mark the RGD not-ready while keeping instances running.
+//     return THAT program with degraded=true and a non-nil err so the
+//     caller can mark the RGD not-ready while keeping instances running.
 //     b. If no prior program exists (first compile ever failed), return
-//        prog=nil and the compile error so the caller can mark the RGD
-//        not-ready without serving anything.
+//     prog=nil and the compile error so the caller can mark the RGD
+//     not-ready without serving anything.
 //
 // The returned servedHash is the hash of the program actually being served
 // (may differ from the current spec's hash when degraded=true).

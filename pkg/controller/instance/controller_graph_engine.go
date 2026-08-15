@@ -29,9 +29,9 @@ import (
 
 	"github.com/kubernetes-sigs/kro/api/v1alpha1"
 	"github.com/kubernetes-sigs/kro/pkg/dynamiccontroller"
+	"github.com/kubernetes-sigs/kro/pkg/graph/revisions"
 	"github.com/kubernetes-sigs/kro/pkg/graphengine/rgdadapter"
 	"github.com/kubernetes-sigs/kro/pkg/graphengine/watchrouter"
-	"github.com/kubernetes-sigs/kro/pkg/graph/revisions"
 	"github.com/kubernetes-sigs/kro/pkg/requeue"
 )
 
@@ -90,7 +90,7 @@ func (c *Controller) reconcileViaGraphEngine(
 
 	rgd := &v1alpha1.ResourceGraphDefinition{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      latest.OwnerKey,
+			Name: latest.OwnerKey,
 		},
 		Spec: *latest.RGDSpec,
 	}
