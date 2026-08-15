@@ -23,17 +23,21 @@ package rgdadapter
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
+	"sort"
 	"strings"
 
 	"github.com/google/cel-go/cel"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"github.com/google/cel-go/common/types"
+	"github.com/google/cel-go/common/types/ref"
+	"github.com/google/cel-go/common/types/traits"
 	"k8s.io/apiserver/pkg/cel/openapi"
 
 	"github.com/kubernetes-sigs/kro/api/v1alpha1"
 	krocel "github.com/kubernetes-sigs/kro/pkg/cel"
-	celunstructured "github.com/kubernetes-sigs/kro/pkg/cel/unstructured"
 	"github.com/kubernetes-sigs/kro/pkg/cel/library"
+	celunstructured "github.com/kubernetes-sigs/kro/pkg/cel/unstructured"
 	"github.com/kubernetes-sigs/kro/pkg/graph"
 	"github.com/kubernetes-sigs/kro/pkg/graphengine/runtime"
 )
@@ -83,16 +87,16 @@ func ProjectInstanceStatus(
 	if err != nil {
 		return nil, fmt.Errorf("status projection: parse: %w", err)
 	}
-	if len(noExprFields) > 0 {
-		return nil, fmt.Errorf("status projection: fields without expressions are not supported: %v", noExprFields)
-	}
-	if len(fields) == 0 {
+	if len(fields) == 0 && len(noExprFields) == 0 {
 		return map[string]any{}, nil
 	}
 
-	// Build a CEL env with every scope key declared as dyn.
-	// runtime library is NOT needed for plain status fields (no newCondition).
-	env, err := buildStatusEnv(rt.Scope(), false)
+	// Declare every node ID (not just published scope keys) so a field that
+	// references a not-yet-applied node (includeWhen=false, or data pending)
+	// surfaces as a runtime data-pending error we can skip per-field, instead
+	// of a compile-time undeclared-reference error that fails the whole
+	// projection and drops sibling fields that DID resolve.
+	env, err := buildStatusEnvForNodes(rt, false)
 	if err != nil {
 		return nil, fmt.Errorf("status projection: build env: %w", err)
 	}
@@ -105,87 +109,173 @@ func ProjectInstanceStatus(
 	for _, f := range fields {
 		val, err := evalStatusExpr(env, saScope, f.Expression)
 		if err != nil {
+			if isDataPendingCEL(err) {
+				// Dependency not observable this cycle: drop the field
+				// (parity with the old path, where fields disappear while
+				// their dependencies are unavailable).
+				continue
+			}
 			return nil, fmt.Errorf("status projection: field %q: %w", f.Path, err)
 		}
 		if err := setAtPath(result, f.Path, val); err != nil {
 			return nil, fmt.Errorf("status projection: set %q: %w", f.Path, err)
 		}
 	}
+	// Literal (expression-free) status fields copy through unchanged,
+	// matching the old builder's schemaless status resolution.
+	for _, path := range noExprFields {
+		val, ok := getAtPath(statusMap, path)
+		if !ok {
+			continue
+		}
+		if err := setAtPath(result, path, val); err != nil {
+			return nil, fmt.Errorf("status projection: set literal %q: %w", path, err)
+		}
+	}
 	return result, nil
 }
 
+// ErrConditionProjectionDegraded indicates that one or more author condition
+// expressions failed evaluation fatally or produced duplicate types. The
+// surviving conditions are still returned; callers reflect the failure on
+// the wire (state: Error) without aborting the reconcile. Mirrors
+// pkg/runtime's ErrConditionEvaluationDegraded (duplicated because
+// pkg/runtime is removed at the end of F6b).
+var ErrConditionProjectionDegraded = errors.New("author condition evaluation degraded")
+
 // ProjectInstanceConditions evaluates the status.conditions expressions
 // (runtime.newCondition(…) calls) against the reconciled runtime scope and
-// returns them as a []metav1.Condition slice.
+// returns the surviving author conditions flattened in declaration order.
 //
-// The Graph engine's compiler does NOT include library.Runtime() (it passes
-// WithRuntimeLibrary(false)).  That means the compiled Graph Program has no
-// compiled programs for condition expressions.  We therefore re-compile the
-// condition expressions here against a fresh CEL environment that DOES
-// include library.Runtime().
+// kroBuiltins are kro's built-in conditions as computed for this reconcile,
+// bound to schema.status.conditions so runtime.condition(schema, _) reads
+// kro's internal value even when the author overrides a built-in type — the
+// same contract as pkg/runtime Node.EvaluateConditions.
 //
-// Gap (scoreboard rows 15, 17): the Graph engine's node compiler does not
-// compile author-condition expressions — they live in the RGD, not in a
-// Graph node.  There is no cached cel.Program in the runtime for them.  We
-// must compile them on every reconcile against the transient env built
-// below.  Once F6 wires a persistent per-RGD CEL cache this overhead can be
-// amortized, but correctness is unaffected.
+// Failures are per-expression: pending data is skipped silently
+// (incomplete=true), fatal errors and duplicate condition types drop that
+// output and wrap ErrConditionProjectionDegraded in the returned error, so
+// the caller preserves previously persisted conditions for the missing types.
+//
+// The Graph engine's compiler passes WithRuntimeLibrary(false), so the
+// compiled Program has no programs for condition expressions; we re-compile
+// them here against a fresh env that includes library.Runtime().
 func ProjectInstanceConditions(
 	rt *runtime.Runtime,
 	rgd *v1alpha1.ResourceGraphDefinition,
-) ([]metav1.Condition, error) {
+	kroBuiltins []v1alpha1.Condition,
+) (conditions []library.Condition, incomplete bool, err error) {
 	if rt == nil {
-		return nil, fmt.Errorf("condition projection: runtime is required")
+		return nil, false, fmt.Errorf("condition projection: runtime is required")
 	}
 	if rgd == nil {
-		return nil, fmt.Errorf("condition projection: rgd is required")
+		return nil, false, fmt.Errorf("condition projection: rgd is required")
 	}
 
 	statusMap, err := unmarshalStatusRaw(rgd)
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	if statusMap == nil {
-		return nil, nil
+		return nil, false, nil
 	}
 
 	// ParseStatusExpressions mutates statusMap to extract + remove the
 	// conditions block.  We only care about conditionExprs here.
 	_, conditionExprs, _, err := graph.ParseStatusExpressions(statusMap)
 	if err != nil {
-		return nil, fmt.Errorf("condition projection: parse: %w", err)
+		return nil, false, fmt.Errorf("condition projection: parse: %w", err)
 	}
 	if len(conditionExprs) == 0 {
-		return nil, nil
+		return nil, false, nil
 	}
 
 	// Build a CEL env WITH library.Runtime() so runtime.newCondition compiles.
-	env, err := buildStatusEnv(rt.Scope(), true)
+	// All node IDs are declared (see ProjectInstanceStatus) so a condition
+	// referencing an unpublished node is a skippable data-pending error.
+	env, err := buildStatusEnvForNodes(rt, true)
 	if err != nil {
-		return nil, fmt.Errorf("condition projection: build env: %w", err)
+		return nil, false, fmt.Errorf("condition projection: build env: %w", err)
 	}
 
-	// The evaluation scope must include the `runtime` singleton.
+	// Evaluation scope: schema-aware values for typed nodes, the `runtime`
+	// singleton, and the `schema` node overlaid so its status.conditions holds
+	// this reconcile's kro built-ins for runtime.condition(schema, _) lookups.
 	saScope := schemaAwareScope(rt.Scope(), rt)
 	scope := make(map[string]any, len(saScope)+1)
 	for k, v := range saScope {
 		scope[k] = v
 	}
+	scope[SchemaNodeID] = schemaWithBuiltinConditions(rt.Scope()[SchemaNodeID], kroBuiltins)
 	scope[library.RuntimeVarName] = library.RuntimeSingleton
 
-	conditions := make([]metav1.Condition, 0, len(conditionExprs))
-	for i, rawExpr := range conditionExprs {
+	var out []library.Condition
+	var failures []string
+	for _, rawExpr := range conditionExprs {
 		inner := unwrapExpr(rawExpr)
-		cond, err := evalConditionExpr(env, scope, inner)
-		if err != nil {
-			return nil, fmt.Errorf("condition projection: conditions[%d] %q: %w", i, rawExpr, err)
+		raw, evalErr := evalConditionRaw(env, scope, inner)
+		if evalErr != nil {
+			if isDataPendingCEL(evalErr) {
+				incomplete = true
+				continue
+			}
+			failures = append(failures, fmt.Sprintf("%q: %v", rawExpr, evalErr))
+			continue
 		}
-		conditions = append(conditions, cond)
+		conds, flattenErr := flattenConditionValue(raw, rawExpr)
+		if flattenErr != nil {
+			failures = append(failures, flattenErr.Error())
+			continue
+		}
+		out = append(out, conds...)
 	}
-	return conditions, nil
+
+	out, dups := dedupConditionTypes(out)
+	if len(dups) > 0 {
+		failures = append(failures, fmt.Sprintf("duplicate condition type(s) %v dropped", dups))
+	}
+	if len(failures) > 0 {
+		return out, true, fmt.Errorf("%w: %s", ErrConditionProjectionDegraded, strings.Join(failures, "; "))
+	}
+	return out, incomplete, nil
 }
 
 // ── helpers ──────────────────────────────────────────────────────────────────
+
+// schemaWithBuiltinConditions returns the value bound to the `schema` CEL
+// variable for author-condition evaluation: the instance's spec/metadata
+// with status replaced by a synthesized status.conditions[] holding kro's
+// built-in conditions. Mirrors pkg/runtime's schemaForConditions.
+func schemaWithBuiltinConditions(schemaVal any, kroBuiltins []v1alpha1.Condition) any {
+	builtinList := make([]any, 0, len(kroBuiltins))
+	for _, c := range kroBuiltins {
+		entry := map[string]any{
+			"type":    string(c.Type),
+			"status":  string(c.Status),
+			"reason":  "",
+			"message": "",
+		}
+		if c.Reason != nil {
+			entry["reason"] = *c.Reason
+		}
+		if c.Message != nil {
+			entry["message"] = *c.Message
+		}
+		builtinList = append(builtinList, entry)
+	}
+	status := map[string]any{"conditions": builtinList}
+
+	obj, ok := schemaVal.(map[string]any)
+	if !ok {
+		return map[string]any{"status": status}
+	}
+	out := make(map[string]any, len(obj))
+	for k, v := range obj {
+		out[k] = v
+	}
+	out["status"] = status
+	return out
+}
 
 // schemaAwareScope returns a copy of rawScope where each value that has a
 // corresponding OpenAPI schema in prog.NodeSchemas is wrapped with
@@ -245,19 +335,45 @@ func unmarshalStatusRaw(rgd *v1alpha1.ResourceGraphDefinition) (map[string]inter
 	return m, nil
 }
 
-// buildStatusEnv constructs a transient CEL environment whose variable
-// declarations cover every key currently in scope (declared as dyn).
-// includeRuntime = true adds library.Runtime() for newCondition support.
-func buildStatusEnv(scope map[string]any, includeRuntime bool) (*cel.Env, error) {
-	ids := make([]string, 0, len(scope))
-	for k := range scope {
-		ids = append(ids, k)
+// buildStatusEnvForNodes constructs a transient CEL environment whose
+// variable declarations cover every node ID of the runtime's program
+// (declared as dyn), whether or not the node has published into scope yet.
+// This keeps a reference to a not-yet-applied node a runtime data-pending
+// error rather than a compile-time undeclared-reference error.
+func buildStatusEnvForNodes(rt *runtime.Runtime, includeRuntime bool) (*cel.Env, error) {
+	nodes := rt.Nodes()
+	ids := make([]string, 0, len(nodes))
+	for _, n := range nodes {
+		ids = append(ids, n.ID())
 	}
 	opts := []krocel.EnvOption{
 		krocel.WithResourceIDs(ids),
 		krocel.WithRuntimeLibrary(includeRuntime),
 	}
 	return krocel.DefaultEnvironment(opts...)
+}
+
+// getAtPath reads the value at the dotted path in m, navigating
+// map[string]any levels only. Only simple dot-separated paths (no array
+// indices) are supported — same limitation as setAtPath.
+func getAtPath(m map[string]any, path string) (any, bool) {
+	parts := strings.Split(path, ".")
+	cur := m
+	for i, part := range parts {
+		v, ok := cur[part]
+		if !ok {
+			return nil, false
+		}
+		if i == len(parts)-1 {
+			return v, true
+		}
+		next, ok := v.(map[string]any)
+		if !ok {
+			return nil, false
+		}
+		cur = next
+	}
+	return nil, false
 }
 
 // evalStatusExpr compiles and evaluates a plain CEL expression (no ${…}
@@ -279,42 +395,105 @@ func evalStatusExpr(env *cel.Env, scope map[string]any, expr string) (any, error
 	return e.Eval(scope)
 }
 
-// evalConditionExpr compiles a runtime.newCondition(…) expression and returns
-// a metav1.Condition from the library.Condition value.
-//
-// NOTE: we bypass krocel.Expression.Eval here because that path goes through
-// conversion.GoNativeType, which does not know about the custom
-// *library.Condition ref.Val type and returns ErrUnsupportedType.  Instead we
-// call cel.Program.Eval directly and pattern-match the raw ref.Val.
-func evalConditionExpr(env *cel.Env, scope map[string]any, expr string) (metav1.Condition, error) {
+// evalConditionRaw compiles and evaluates a runtime.newCondition(…) expression
+// and returns the raw CEL ref.Val for the caller to flatten. We call
+// cel.Program.Eval directly (not krocel.Expression.Eval) because Go-native
+// conversion does not know the custom *library.Condition ref.Val type.
+func evalConditionRaw(env *cel.Env, scope map[string]any, expr string) (ref.Val, error) {
 	parsed, issues := env.Parse(expr)
 	if issues != nil && issues.Err() != nil {
-		return metav1.Condition{}, fmt.Errorf("parse %q: %w", expr, issues.Err())
+		return nil, fmt.Errorf("parse %q: %w", expr, issues.Err())
 	}
 	checked, issues := env.Check(parsed)
 	if issues != nil && issues.Err() != nil {
-		return metav1.Condition{}, fmt.Errorf("check %q: %w", expr, issues.Err())
+		return nil, fmt.Errorf("check %q: %w", expr, issues.Err())
 	}
 	prog, err := env.Program(checked)
 	if err != nil {
-		return metav1.Condition{}, fmt.Errorf("program %q: %w", expr, err)
+		return nil, fmt.Errorf("program %q: %w", expr, err)
 	}
-
 	out, _, err := prog.Eval(scope)
 	if err != nil {
-		return metav1.Condition{}, fmt.Errorf("eval %q: %w", expr, err)
+		return nil, fmt.Errorf("eval %q: %w", expr, err)
 	}
+	return out, nil
+}
 
-	// The eval result is a *library.Condition ref.Val.
-	if c, ok := out.(*library.Condition); ok {
-		return metav1.Condition{
-			Type:    c.ConditionType,
-			Status:  metav1.ConditionStatus(c.Status),
-			Reason:  c.Reason,
-			Message: c.Message,
-		}, nil
+// flattenConditionValue extracts Condition values from a CEL result: a single
+// Condition, or a list of Conditions for collection expansion. Mirrors
+// pkg/runtime's flattenCelConditionValue.
+func flattenConditionValue(val ref.Val, exprText string) ([]library.Condition, error) {
+	if val == nil {
+		return nil, fmt.Errorf("condition %q returned null", exprText)
 	}
-	return metav1.Condition{}, fmt.Errorf("expected *library.Condition ref.Val, got %T", out)
+	if cond, ok := val.Value().(*library.Condition); ok {
+		return []library.Condition{*cond}, nil
+	}
+	if lister, ok := val.(traits.Lister); ok {
+		var out []library.Condition
+		it := lister.Iterator()
+		for it.HasNext() == types.True {
+			elem := it.Next()
+			cond, ok := elem.Value().(*library.Condition)
+			if !ok {
+				return nil, fmt.Errorf("condition %q list element is not a Condition (got %T)", exprText, elem.Value())
+			}
+			out = append(out, *cond)
+		}
+		return out, nil
+	}
+	return nil, fmt.Errorf("condition %q must return a Condition or list(Condition), got %v", exprText, val.Type().TypeName())
+}
+
+// dedupConditionTypes removes every occurrence of any condition type that
+// appears more than once, returning the kept conditions and the sorted list
+// of dropped types. Mirrors pkg/runtime's dedupConditionTypes.
+func dedupConditionTypes(conds []library.Condition) ([]library.Condition, []string) {
+	counts := make(map[string]int, len(conds))
+	for _, c := range conds {
+		counts[c.ConditionType]++
+	}
+	kept := make([]library.Condition, 0, len(conds))
+	dupSet := make(map[string]struct{})
+	for _, c := range conds {
+		if counts[c.ConditionType] > 1 {
+			dupSet[c.ConditionType] = struct{}{}
+			continue
+		}
+		kept = append(kept, c)
+	}
+	if len(dupSet) == 0 {
+		return kept, nil
+	}
+	dups := make([]string, 0, len(dupSet))
+	for t := range dupSet {
+		dups = append(dups, t)
+	}
+	sort.Strings(dups)
+	return kept, dups
+}
+
+// dataPendingPatterns are CEL error substrings meaning "required data not
+// available yet" rather than an expression bug. Mirrors pkg/runtime's
+// celDataPendingPatterns.
+var dataPendingPatterns = []string{
+	"no such key",
+	"no such field",
+	"no such attribute",
+	"index out of bounds",
+}
+
+func isDataPendingCEL(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := err.Error()
+	for _, p := range dataPendingPatterns {
+		if strings.Contains(msg, p) {
+			return true
+		}
+	}
+	return false
 }
 
 // unwrapExpr strips ${...} wrappers from a CEL expression string.

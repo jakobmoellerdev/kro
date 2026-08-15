@@ -230,7 +230,7 @@ func TestProjectInstanceStatus_NoStatus(t *testing.T) {
 
 // TestProjectInstanceConditions_Basic verifies that a status.conditions block
 // with a single runtime.newCondition(…) expression is evaluated and returned
-// as a []metav1.Condition.
+// as a []library.Condition in declaration order.
 func TestProjectInstanceConditions_Basic(t *testing.T) {
 	rgd := buildRGDWithStatus(map[string]any{
 		// A single condition that is always True.
@@ -248,13 +248,42 @@ func TestProjectInstanceConditions_Basic(t *testing.T) {
 
 	rt := compileAndSeedRuntime(t, rgd, instance, nil)
 
-	conditions, err := ProjectInstanceConditions(rt, rgd)
+	conditions, incomplete, err := ProjectInstanceConditions(rt, rgd, nil)
 	require.NoError(t, err)
+	assert.False(t, incomplete)
 	require.Len(t, conditions, 1)
 
 	cond := conditions[0]
-	assert.Equal(t, "Ready", cond.Type)
-	assert.Equal(t, metav1.ConditionTrue, cond.Status)
+	assert.Equal(t, "Ready", cond.ConditionType)
+	assert.Equal(t, "True", cond.Status)
 	assert.Equal(t, "ResourcesReady", cond.Reason)
 	assert.Equal(t, "all resources applied", cond.Message)
+}
+
+// TestProjectInstanceConditions_BuiltinReference verifies runtime.condition(
+// schema, 'X') reads the kro built-ins passed by the caller, not the instance
+// snapshot's wire conditions.
+func TestProjectInstanceConditions_BuiltinReference(t *testing.T) {
+	rgd := buildRGDWithStatus(map[string]any{
+		"conditions": []any{
+			"${runtime.newCondition({type: 'Ready', status: runtime.condition(schema, 'ResourcesReady').status})}",
+		},
+	})
+
+	instance := &unstructured.Unstructured{Object: map[string]any{
+		"apiVersion": "example.com/v1alpha1",
+		"kind":       "StatusTest",
+		"metadata":   map[string]any{"name": "demo", "namespace": "default"},
+		"spec":       map[string]any{"name": "myapp"},
+	}}
+
+	rt := compileAndSeedRuntime(t, rgd, instance, nil)
+
+	builtins := []v1alpha1.Condition{{Type: "ResourcesReady", Status: "True"}}
+	conditions, incomplete, err := ProjectInstanceConditions(rt, rgd, builtins)
+	require.NoError(t, err)
+	assert.False(t, incomplete)
+	require.Len(t, conditions, 1)
+	assert.Equal(t, "Ready", conditions[0].ConditionType)
+	assert.Equal(t, "True", conditions[0].Status)
 }
