@@ -21,7 +21,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	expv1alpha1 "github.com/kubernetes-sigs/kro/api/v1alpha1"
-	"github.com/kubernetes-sigs/kro/pkg/graphengine/cel"
+	"github.com/kubernetes-sigs/kro/pkg/cel"
 	"github.com/kubernetes-sigs/kro/pkg/graphengine/compiler/variable"
 )
 

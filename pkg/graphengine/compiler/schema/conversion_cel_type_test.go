@@ -25,7 +25,7 @@ import (
 	"k8s.io/apiserver/pkg/cel/openapi"
 	"k8s.io/kube-openapi/pkg/validation/spec"
 
-	krocel "github.com/kubernetes-sigs/kro/pkg/graphengine/cel"
+	krocel "github.com/kubernetes-sigs/kro/pkg/cel"
 )
 
 func TestInferSchemaFromCELType_Primitives(t *testing.T) {

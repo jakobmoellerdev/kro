@@ -15,7 +15,7 @@
 package variable
 
 import (
-	krocel "github.com/kubernetes-sigs/kro/pkg/graphengine/cel"
+	krocel "github.com/kubernetes-sigs/kro/pkg/cel"
 )
 
 // FieldDescriptor represents a field in a resource template that contains CEL expressions.
