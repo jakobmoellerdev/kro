@@ -179,10 +179,15 @@ func (n *Node) CheckReadiness() error {
 		return fmt.Errorf("node %q: no observed state: %w", n.spec.ID, ErrWaitingForReadiness)
 	}
 
+	// Collections evaluate readyWhen per element with `each` bound to the
+	// item, AND-folded across every item and every expression. A non-
+	// collection node evaluates each expression once against scope.
+	if n.IsCollection() {
+		return n.checkCollectionReadiness()
+	}
+
 	// For singletons, evaluate against scope (the node's value already
-	// published). For collections, evaluate readyWhen per instance with
-	// the iteration value bound to the node ID — readyWhen for collections
-	// is "every element is ready", expressed via CEL's all().
+	// published).
 	for _, expr := range n.spec.ReadyWhen {
 		v, err := expr.Eval(n.rt.scope)
 		if err != nil {
@@ -197,6 +202,48 @@ func (n *Node) CheckReadiness() error {
 		}
 		if !b {
 			return fmt.Errorf("node %q: readyWhen %q is false: %w", n.spec.ID, expr.UserExpression(), ErrWaitingForReadiness)
+		}
+	}
+	return nil
+}
+
+// checkCollectionReadiness evaluates a collection node's readyWhen list
+// per observed item, with `each` bound to that item's object, and AND-folds
+// the result across all items and all expressions. observed is the applied/
+// SSA-response set recorded by the executor (no live cluster re-read).
+//
+// Count gate: an empty observed set means either the collection legitimately
+// expanded to zero items (ready) or nothing has landed yet. Because the
+// graph-engine executor records observed = applied, an empty set here is a
+// resolved-empty collection and is treated as ready — mirroring classic
+// checkCollectionReadiness where len(desired)==0 short-circuits to ready.
+func (n *Node) checkCollectionReadiness() error {
+	if len(n.observed) == 0 {
+		return nil
+	}
+	for i, obj := range n.observed {
+		// Per-item scope overlay: bind `each` to this item on top of the
+		// runtime scope. A fresh map avoids leaking bindings across items.
+		scope := make(map[string]any, len(n.rt.scope)+1)
+		for k, v := range n.rt.scope {
+			scope[k] = v
+		}
+		scope[compiler.EachVarName] = obj.Object
+		for _, expr := range n.spec.ReadyWhen {
+			v, err := expr.Eval(scope)
+			if err != nil {
+				if isCELDataPending(err) {
+					return fmt.Errorf("node %q: readyWhen %q (item %d): %w (%w)", n.spec.ID, expr.UserExpression(), i, err, ErrWaitingForReadiness)
+				}
+				return fmt.Errorf("node %q: readyWhen %q (item %d): %w", n.spec.ID, expr.UserExpression(), i, err)
+			}
+			b, ok := v.(bool)
+			if !ok {
+				return fmt.Errorf("node %q: readyWhen %q (item %d) returned %T, want bool", n.spec.ID, expr.UserExpression(), i, v)
+			}
+			if !b {
+				return fmt.Errorf("node %q: readyWhen %q (item %d) is false: %w", n.spec.ID, expr.UserExpression(), i, ErrWaitingForReadiness)
+			}
 		}
 	}
 	return nil

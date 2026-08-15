@@ -18,6 +18,7 @@ import (
 	"fmt"
 
 	"github.com/google/cel-go/cel"
+	"github.com/google/cel-go/common/types"
 	apiservercel "k8s.io/apiserver/pkg/cel"
 	"k8s.io/apiserver/pkg/cel/openapi"
 	"k8s.io/kube-openapi/pkg/validation/spec"
@@ -139,6 +140,49 @@ func (bc *buildContext) extendWithIterators(parent *cel.Env, iterators map[strin
 	return extended, nil
 }
 
+// extendWithTypedVar returns a cached env that augments parent with a single
+// typed variable declaration derived from schema. Mirrors the classic
+// pkg/graph builder: used to bind the collection iterator variable (`each`)
+// to the node's element schema when type-checking collection readyWhen.
+func (bc *buildContext) extendWithTypedVar(parent *cel.Env, varName string, s *spec.Schema) (*cel.Env, error) {
+	if s == nil {
+		return parent, nil
+	}
+	fp := "typedvar\x00" + varName + "\x00" + fmt.Sprintf("%p", s)
+	key := extendedEnvKey{parent: parent, fingerprint: fp}
+	if env, ok := bc.extendedEnvs[key]; ok {
+		return env, nil
+	}
+
+	declType := bc.schemaDeclType(s)
+	if declType == nil {
+		return nil, fmt.Errorf("failed to build DeclType for schema")
+	}
+	typeName := krocel.TypeNamePrefix + varName
+	declType = declType.MaybeAssignTypeName(typeName)
+
+	provider := krocel.NewDeclTypeProvider(declType)
+	provider.SetRecognizeKeywordAsFieldName(true)
+
+	celType := declType.CelType()
+
+	registry := types.NewEmptyRegistry()
+	wrappedProvider, err := provider.WithTypeProvider(registry)
+	if err != nil {
+		return nil, err
+	}
+
+	extended, err := parent.Extend(
+		cel.Variable(varName, celType),
+		cel.CustomTypeProvider(wrappedProvider),
+	)
+	if err != nil {
+		return nil, err
+	}
+	bc.extendedEnvs[key] = extended
+	return extended, nil
+}
+
 // iteratorFingerprint produces a deterministic key for an iterator type
 // map so the cache lookup is order-insensitive.
 func iteratorFingerprint(iterators map[string]*cel.Type) string {
@@ -246,7 +290,7 @@ func celTypeFromSchema(bc *buildContext, s *spec.Schema, typeName string) *cel.T
 // single node. The passed nodeSchema describes the publication shape for
 // Template nodes (i.e. the actual payload). For Ref/Watch/Def the payload
 // doesn't match nodeSchema; callers pass nil to fall back to dyn.
-func validateAndCompileNode(bc *buildContext, n *Node, payloadSchema *spec.Schema) error {
+func validateAndCompileNode(bc *buildContext, n *Node, payloadSchema *spec.Schema, elementSchema *spec.Schema) error {
 	iteratorTypes, err := validateAndCompileForEach(bc, n)
 	if err != nil {
 		return err
@@ -268,12 +312,22 @@ func validateAndCompileNode(bc *buildContext, n *Node, payloadSchema *spec.Schem
 		}
 	}
 
-	// includeWhen and readyWhen are bool conditions; they evaluate at the
-	// node level (no iterator scope), against the typed env.
-	if err := validateAndCompileConditions(bc, n.IncludeWhen, n.ID, "includeWhen"); err != nil {
+	// includeWhen evaluates at the node level (no iterator scope), against the
+	// typed env.
+	if err := validateAndCompileConditions(bc, bc.env, n.IncludeWhen, n.ID, "includeWhen"); err != nil {
 		return err
 	}
-	if err := validateAndCompileConditions(bc, n.ReadyWhen, n.ID, "readyWhen"); err != nil {
+	// readyWhen for a collection is evaluated per-element with `each` bound to
+	// the node's element schema; type-check it against an env extended with
+	// that typed var. Non-collection readyWhen keeps compiling against bc.env.
+	readyEnv := bc.env
+	if n.IsCollection() {
+		readyEnv, err = bc.extendWithTypedVar(bc.env, EachVarName, elementSchema)
+		if err != nil {
+			return fmt.Errorf("extend env with %q for readyWhen: %w", EachVarName, err)
+		}
+	}
+	if err := validateAndCompileConditions(bc, readyEnv, n.ReadyWhen, n.ID, "readyWhen"); err != nil {
 		return err
 	}
 	return nil
@@ -284,9 +338,9 @@ func validateAndCompileNode(bc *buildContext, n *Node, payloadSchema *spec.Schem
 // concretely-typed bools pass; dyn passes (def-sourced expressions can't
 // be statically narrowed to bool); anything else (string, int, list, etc.)
 // is almost always a user mistake.
-func validateAndCompileConditions(bc *buildContext, exprs []*krocel.Expression, nodeID, kind string) error {
+func validateAndCompileConditions(bc *buildContext, env *cel.Env, exprs []*krocel.Expression, nodeID, kind string) error {
 	for i, expr := range exprs {
-		checked, err := bc.compile(bc.env, expr)
+		checked, err := bc.compile(env, expr)
 		if err != nil {
 			return fmt.Errorf("node %q: %s[%d] (%q): %w", nodeID, kind, i, expr.UserExpression(), err)
 		}

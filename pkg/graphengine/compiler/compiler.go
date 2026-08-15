@@ -268,7 +268,10 @@ func (ctx *CompilationContext) compileFrame(apiNodes []expv1alpha1.Node, isRoot 
 		if node.Kind == NodeKindTemplate {
 			payloadSchema = nodeSchemas[id]
 		}
-		if err := validateAndCompileNode(bc, node, payloadSchema); err != nil {
+		// elementSchema is the unwrapped per-node schema (element type for
+		// collections), used to type `each` when compiling collection readyWhen.
+		elementSchema := nodeSchemas[id]
+		if err := validateAndCompileNode(bc, node, payloadSchema, elementSchema); err != nil {
 			return nil, nil, fmt.Errorf("compile node %q: %w", id, err)
 		}
 	}
