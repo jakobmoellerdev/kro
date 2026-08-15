@@ -17,7 +17,7 @@ package resolver
 import (
 	"fmt"
 
-	"github.com/kubernetes-sigs/kro/pkg/graphengine/cel/sentinels"
+	"github.com/kubernetes-sigs/kro/pkg/cel/sentinels"
 	"github.com/kubernetes-sigs/kro/pkg/graphengine/compiler/fieldpath"
 	"github.com/kubernetes-sigs/kro/pkg/graphengine/compiler/variable"
 )

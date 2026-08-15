@@ -24,7 +24,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/kubernetes-sigs/kro/pkg/graphengine/cel/sentinels"
+	"github.com/kubernetes-sigs/kro/pkg/cel/sentinels"
 )
 
 // evalExpr compiles and evaluates a CEL expression returning the ref.Val.
