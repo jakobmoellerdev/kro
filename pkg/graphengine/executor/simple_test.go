@@ -204,14 +204,15 @@ func TestSimple_Apply(t *testing.T) {
 			},
 		},
 		{
-			name: "ref node returns ErrUnsupported",
+			name: "ref to a missing external object is soft ErrNotReady",
 			graph: generator.NewGraph("g",
+				generator.WithNamespace("default"),
 				generator.WithRef("existing", &expv1alpha1.ExternalRef{
-					APIVersion: "v1", Kind: "Pod",
-					Metadata: expv1alpha1.ExternalRefMetadata{Name: "p"},
+					APIVersion: "v1", Kind: "ConfigMap",
+					Metadata: expv1alpha1.ExternalRefMetadata{Name: "not-there"},
 				}),
 			),
-			wantErr: ErrUnsupported.Error(),
+			wantErr: ErrNotReady.Error(),
 		},
 		{
 			name: "watch node returns ErrUnsupported",
@@ -276,6 +277,55 @@ func TestSimple_Apply(t *testing.T) {
 				tc.after(t, cl)
 			}
 		})
+	}
+}
+
+// TestSimple_ApplyRef verifies the read-only ref path: kro GETs the live
+// external object, publishes its fields into scope for dependents, and never
+// records it as a managed resource (so it is never pruned or deleted).
+func TestSimple_ApplyRef(t *testing.T) {
+	t.Parallel()
+	cl := fake.NewClientBuilder().WithScheme(newScheme(t)).Build()
+
+	// An object that exists in the cluster but is NOT managed by this Graph.
+	external := &unstructured.Unstructured{}
+	external.SetGroupVersionKind(configMapGVK)
+	external.SetName("external-web-config")
+	external.SetNamespace("default")
+	require.NoError(t, unstructured.SetNestedStringMap(external.Object,
+		map[string]string{"MESSAGE": "hi from the cluster"}, "data"))
+	require.NoError(t, cl.Create(context.Background(), external))
+
+	g := generator.NewGraph("g",
+		generator.WithNamespace("default"),
+		generator.WithRef("extcfg", &expv1alpha1.ExternalRef{
+			APIVersion: "v1", Kind: "ConfigMap",
+			Metadata: expv1alpha1.ExternalRefMetadata{Name: "external-web-config"},
+		}),
+		generator.WithTemplate("copy", map[string]any{
+			"apiVersion": "v1", "kind": "ConfigMap",
+			"metadata": map[string]any{"name": "copied"},
+			"data":     map[string]any{"MESSAGE": "${extcfg.data.MESSAGE}"},
+		}),
+	)
+
+	ex := NewSimple(cl)
+	rt := compileAndBuild(t, g)
+	res, err := ex.Apply(context.Background(), rt, watchrouter.NoopWatcher{})
+	require.NoError(t, err)
+
+	// The dependent template consumed the external value.
+	copied := &unstructured.Unstructured{}
+	copied.SetGroupVersionKind(configMapGVK)
+	require.NoError(t, cl.Get(context.Background(),
+		types.NamespacedName{Namespace: "default", Name: "copied"}, copied))
+	msg, _, _ := unstructured.NestedString(copied.Object, "data", "MESSAGE")
+	assert.Equal(t, "hi from the cluster", msg)
+
+	// The ref object must never be tracked as managed — it is read-only.
+	for _, mr := range res.Applied {
+		assert.NotEqual(t, "extcfg", mr.NodeID, "ref node must not be recorded as a managed resource")
+		assert.NotEqual(t, "external-web-config", mr.Name, "external ref object must never be managed")
 	}
 }
 

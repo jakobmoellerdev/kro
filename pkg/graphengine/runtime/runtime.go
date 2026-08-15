@@ -40,6 +40,12 @@ type Runtime struct {
 	nodes   []*Node
 	byID    map[string]*Node
 
+	// applyOrders maps node ID to its one-based reverse-topological layer,
+	// matching the classic runtime's ApplyOrders. Higher numbers are deleted
+	// first (dependents before dependencies). Persisted on each managed
+	// resource as metadata.ApplyOrderAnnotation for the deletion path.
+	applyOrders map[string]int
+
 	// maxCollectionSize caps forEach expansion for this Runtime. Per-
 	// Runtime rather than package-global so concurrent reconciles with
 	// different intended caps don't race. Zero disables the cap (with
@@ -105,7 +111,38 @@ func New(prog *compiler.Program, g *expv1alpha1.Graph, opts ...Option) *Runtime 
 			}
 		}
 	}
+	// Phase 3: compute one-based reverse-topological apply orders. Nodes are
+	// already in topological order (dependencies precede dependents), so a
+	// single forward pass yields order(n) = 1 + max(order(deps)); leaves = 1.
+	// Def nodes (e.g. the synthetic `schema`/instance node) are excluded from
+	// the depth calculation and never stamped — matching the classic runtime,
+	// whose ApplyOrders cover only real resource nodes.
+	rt.applyOrders = make(map[string]int, len(rt.nodes))
+	for _, n := range rt.nodes {
+		if n.Kind() == compiler.NodeKindDef {
+			continue
+		}
+		order := 1
+		for _, depID := range n.spec.Dependencies {
+			dep, ok := rt.byID[depID]
+			if !ok || dep.Kind() == compiler.NodeKindDef {
+				continue
+			}
+			if d := rt.applyOrders[depID]; d+1 > order {
+				order = d + 1
+			}
+		}
+		rt.applyOrders[n.ID()] = order
+	}
 	return rt
+}
+
+// ApplyOrder returns the one-based reverse-topological layer for the node,
+// used to persist the deletion wave as metadata.ApplyOrderAnnotation. The
+// bool is false for unknown node IDs.
+func (r *Runtime) ApplyOrder(nodeID string) (int, bool) {
+	o, ok := r.applyOrders[nodeID]
+	return o, ok
 }
 
 // Program returns the compiled Program backing this Runtime.
