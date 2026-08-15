@@ -27,7 +27,7 @@ import (
 	"k8s.io/apiserver/pkg/cel/openapi"
 	"k8s.io/kube-openapi/pkg/validation/spec"
 
-	"github.com/kubernetes-sigs/kro/pkg/graphengine/cel/library"
+	"github.com/kubernetes-sigs/kro/pkg/cel/library"
 )
 
 // EnvOption is a function that modifies the environment options.
