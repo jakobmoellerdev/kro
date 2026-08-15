@@ -462,7 +462,7 @@ func (dc *DynamicController) enqueueFromInformer(parentGVR schema.GroupVersionRe
 			// still trigger a reconcile: resuming (suspended->enabled) so the
 			// instance re-converges, and suspending (enabled->suspended) so the
 			// ReconciliationSuspended status is written promptly (the graph
-			// engine, unlike the classic path, does not periodically requeue).
+			// engine does not periodically requeue).
 			if !reconcileSuspensionChangedInUpdate(oldMeta, newMeta) {
 				dc.log.V(2).Info("Skipping update due to unchanged generation",
 					"name", newMeta.GetName(), "namespace", newMeta.GetNamespace(), "generation", newMeta.GetGeneration())

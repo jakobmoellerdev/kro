@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// Package rgdadapter – instance status projection (F3b).
+// Package rgdadapter – instance status projection.
 //
 // After executor.Apply has reconciled the Graph nodes, the runtime scope
 // holds each node's observed value.  ProjectInstanceStatus evaluates the
@@ -111,9 +111,9 @@ func ProjectInstanceStatus(
 		val, err := evalStatusExpr(env, saScope, f.Expression)
 		if err != nil {
 			if isDataPendingCEL(err) {
-				// Dependency not observable this cycle: drop the field
-				// (parity with the old path, where fields disappear while
-				// their dependencies are unavailable).
+				// Dependency not observable this cycle: drop the field so a
+				// field whose dependency is unavailable disappears rather
+				// than failing the whole projection.
 				continue
 			}
 			return nil, fmt.Errorf("status projection: field %q: %w", f.Path, err)
@@ -122,8 +122,7 @@ func ProjectInstanceStatus(
 			return nil, fmt.Errorf("status projection: set %q: %w", f.Path, err)
 		}
 	}
-	// Literal (expression-free) status fields copy through unchanged,
-	// matching the old builder's schemaless status resolution.
+	// Literal (expression-free) status fields copy through unchanged.
 	for _, path := range noExprFields {
 		val, ok := getAtPath(statusMap, path)
 		if !ok {
@@ -139,9 +138,7 @@ func ProjectInstanceStatus(
 // ErrConditionProjectionDegraded indicates that one or more author condition
 // expressions failed evaluation fatally or produced duplicate types. The
 // surviving conditions are still returned; callers reflect the failure on
-// the wire (state: Error) without aborting the reconcile. Mirrors
-// pkg/runtime's ErrConditionEvaluationDegraded (duplicated because
-// pkg/runtime is removed at the end of F6b).
+// the wire (state: Error) without aborting the reconcile.
 var ErrConditionProjectionDegraded = errors.New("author condition evaluation degraded")
 
 // ProjectInstanceConditions evaluates the status.conditions expressions
@@ -150,8 +147,7 @@ var ErrConditionProjectionDegraded = errors.New("author condition evaluation deg
 //
 // kroBuiltins are kro's built-in conditions as computed for this reconcile,
 // bound to schema.status.conditions so runtime.condition(schema, _) reads
-// kro's internal value even when the author overrides a built-in type — the
-// same contract as pkg/runtime Node.EvaluateConditions.
+// kro's internal value even when the author overrides a built-in type.
 //
 // Failures are per-expression: pending data is skipped silently
 // (incomplete=true), fatal errors and duplicate condition types drop that
@@ -246,7 +242,7 @@ func ProjectInstanceConditions(
 // schemaWithBuiltinConditions returns the value bound to the `schema` CEL
 // variable for author-condition evaluation: the instance's spec/metadata
 // with status replaced by a synthesized status.conditions[] holding kro's
-// built-in conditions. Mirrors pkg/runtime's schemaForConditions.
+// built-in conditions.
 func schemaWithBuiltinConditions(schemaVal any, kroBuiltins []v1alpha1.Condition) any {
 	builtinList := make([]any, 0, len(kroBuiltins))
 	for _, c := range kroBuiltins {
@@ -350,8 +346,8 @@ func unmarshalStatusRaw(rgd *v1alpha1.ResourceGraphDefinition) (map[string]inter
 // reference to a not-yet-applied node a runtime data-pending error rather
 // than a compile-time undeclared-reference error.
 //
-// Collection nodes (forEach templates, selector externalRefs, watch nodes)
-// are declared as list(dyn) rather than the scalar `any` type, so status
+// Collection nodes (forEach templates, selector externalRefs) are declared
+// as list(dyn) rather than the scalar `any` type, so status
 // expressions that range over them — filter / map / sortBy — type-check
 // (CEL rejects `any` as a comprehension range; it must be list, map, or
 // dyn). Scalar nodes stay `any`, matching the schemaless projection contract.
@@ -434,8 +430,7 @@ func evalConditionRaw(env *cel.Env, scope map[string]any, expr string) (ref.Val,
 }
 
 // flattenConditionValue extracts Condition values from a CEL result: a single
-// Condition, or a list of Conditions for collection expansion. Mirrors
-// pkg/runtime's flattenCelConditionValue.
+// Condition, or a list of Conditions for collection expansion.
 func flattenConditionValue(val ref.Val, exprText string) ([]library.Condition, error) {
 	if val == nil {
 		return nil, fmt.Errorf("condition %q returned null", exprText)
@@ -461,7 +456,7 @@ func flattenConditionValue(val ref.Val, exprText string) ([]library.Condition, e
 
 // dedupConditionTypes removes every occurrence of any condition type that
 // appears more than once, returning the kept conditions and the sorted list
-// of dropped types. Mirrors pkg/runtime's dedupConditionTypes.
+// of dropped types.
 func dedupConditionTypes(conds []library.Condition) ([]library.Condition, []string) {
 	counts := make(map[string]int, len(conds))
 	for _, c := range conds {
@@ -488,8 +483,7 @@ func dedupConditionTypes(conds []library.Condition) ([]library.Condition, []stri
 }
 
 // dataPendingPatterns are CEL error substrings meaning "required data not
-// available yet" rather than an expression bug. Mirrors pkg/runtime's
-// celDataPendingPatterns.
+// available yet" rather than an expression bug.
 var dataPendingPatterns = []string{
 	"no such key",
 	"no such field",

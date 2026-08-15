@@ -33,10 +33,8 @@ import (
 // Manager owns the lifecycle of one shared informer per GVR. Informers
 // start lazily on first EnsureWatch and run until the last owner releases
 // them (or Shutdown is called). Owners are arbitrary string IDs; the watch
-// manager makes no distinction between them. The same GVR can be retained
-// by many owners — kro's coordinator owns child watches; in the graph engine the
-// only owner is the coordinator itself, but the multi-owner shape is kept
-// to allow extension.
+// manager makes no distinction between them. The coordinator is the only
+// owner today, but the multi-owner shape is kept to allow extension.
 type Manager struct {
 	mu      sync.Mutex
 	watches map[schema.GroupVersionResource]*gvrWatch

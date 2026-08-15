@@ -14,7 +14,7 @@
 
 package core_test
 
-// TestRGDDeletion is the F5 proof: executor.Simple.Delete tears resources down
+// TestRGDDeletion verifies that executor.Simple.Delete tears resources down
 // in reverse-applied order, which equals dependents-before-dependencies for a
 // strictly topological Apply walk.
 //
@@ -27,12 +27,12 @@ package core_test
 //  4. DAG.ReverseTopologicalLayers for the compiled Program yields cm2 in
 //     layer-0 and cm1 in layer-1, matching the reverse-slice order.
 //
-// Parity result: reverse-slice == ReverseTopologicalLayers for a linear
-// dependency chain (single dependent per dependency).  Parallel siblings
+// The reverse-slice order equals ReverseTopologicalLayers for a linear
+// dependency chain (single dependent per dependency). Parallel siblings
 // within the same layer would both appear consecutively in Applied (heap-
 // ordered by original index) and consecutively in the reverse; they land in
-// the same ReverseTopologicalLayers layer.  Order within the layer is
-// arbitrary in both approaches, so parallel-sibling parity holds too.
+// the same ReverseTopologicalLayers layer. Order within the layer is
+// arbitrary in both approaches, so parallel siblings behave identically too.
 
 import (
 	"testing"
@@ -234,7 +234,7 @@ func TestRGDDeletion(t *testing.T) {
 	if cm1Layer <= 0 {
 		t.Errorf("ReverseTopologicalLayers parity: cm1 not in a later layer than cm2; cm1Layer=%d, layers=%v", cm1Layer, filteredLayers)
 	}
-	t.Logf("DAG parity PASS: ReverseTopologicalLayers layers=%v match reverse-slice order", filteredLayers)
+	t.Logf("DAG PASS: ReverseTopologicalLayers layers=%v match reverse-slice delete order", filteredLayers)
 
 	// ── 8. Execute Delete and verify both resources are gone from the cluster ─
 	if err := exec.Delete(env.Ctx, applied); err != nil {
@@ -257,8 +257,7 @@ func TestRGDDeletion(t *testing.T) {
 			return &notYetError{msg: name + " still present after Delete"}
 		})
 	}
-	t.Logf("F5 PASS: Delete removed both cm1 and cm2 from the cluster; order was dependents-first (cm2→cm1)")
-
+	t.Logf("Delete removed both cm1 and cm2 from the cluster; order was dependents-first (cm2→cm1)")
 	// ── 9. Order safety: at no point is cm1 gone while cm2 still exists ──────
 	// Since Delete is synchronous and deletes cm2 BEFORE cm1, once Delete
 	// returns we can assert the post-state: both gone.  We cannot observe
@@ -292,5 +291,5 @@ func TestRGDDeletion(t *testing.T) {
 	if !cm1Gone {
 		t.Errorf("post-Delete: cm1 (dependency) not gone")
 	}
-	t.Logf("F5 PASS: ordered-deletion parity — reverse-slice equals ReverseTopologicalLayers for the cm1→cm2 chain")
+	t.Logf("ordered-deletion: reverse-slice equals ReverseTopologicalLayers for the cm1→cm2 chain")
 }

@@ -59,11 +59,10 @@ func NewCombinedResolver(clientConfig *rest.Config, httpClient *http.Client) (re
 	return combinedResolver, nil
 }
 
-// NewCombinedResolverWithCache is the Graph-engine constructor: same two-tier
-// wiring as NewCombinedResolver, but the discovery-backed tier is a
-// push-invalidated LRU (CachedSchemaResolver) instead of a TTL cache. The
-// live cache is returned so a schema watcher can call InvalidateGroupKind.
-// RGD callers keep using NewCombinedResolver (2-return, TTL).
+// NewCombinedResolverWithCache uses the same two-tier wiring as
+// NewCombinedResolver, but the discovery-backed tier is a push-invalidated LRU
+// (CachedSchemaResolver) instead of a TTL cache. The live cache is returned so
+// a schema watcher can call InvalidateGroupKind.
 func NewCombinedResolverWithCache(clientConfig *rest.Config, httpClient *http.Client) (resolver.SchemaResolver, *CachedSchemaResolver, error) {
 	discoveryClient, err := discovery.NewDiscoveryClientForConfigAndClient(clientConfig, httpClient)
 	if err != nil {

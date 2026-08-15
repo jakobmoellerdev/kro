@@ -135,7 +135,7 @@ func validateNodeID(id string) error {
 }
 
 // validateNodeShape enforces the discriminated-union contract: exactly one
-// of template/patch/ref/def must be set.
+// of template/ref/def/graph must be set.
 func validateNodeShape(n *expv1alpha1.Node) error {
 	set := 0
 	if n.Template != nil {

@@ -36,7 +36,7 @@ import (
 	"github.com/kubernetes-sigs/kro/test/integration/graphengine/environment"
 )
 
-// TestRGDReconcileApply is the F3a end-to-end proof: an RGD's composition,
+// TestRGDReconcileApply verifies end-to-end that an RGD's composition,
 // translated to a Graph via BuildRuntimeForInstance, APPLIES real resources
 // to the cluster through executor.Simple.Apply in envtest.
 //
@@ -104,7 +104,7 @@ func TestRGDReconcileApply(t *testing.T) {
 	}
 
 	// ── 3. Build the Runtime via BuildRuntimeForInstance ────────────────────
-	// This is the F6 controller entrypoint: RGD + instance → running executor.
+	// RGD + instance → running executor.
 	cmp := env.Mgr.GetControllerOptions() // unused, just documenting env has it
 	_ = cmp
 
@@ -182,7 +182,7 @@ func TestRGDReconcileApply(t *testing.T) {
 		}
 	}
 
-	t.Logf("F3a PASS: RGD composition applied 2 ConfigMaps to the cluster via Graph engine executor")
+	t.Logf("applied 2 ConfigMaps to the cluster via Graph engine executor")
 	t.Logf("  cm1.data.app = demo-app (resolved from instance spec via schema def node)")
 	t.Logf("  cm2.data.ref = cm1 (cross-node CEL reference)")
 	t.Logf("  Graph=%s/%s, runtime nodes=%d, managed resources=%d",
@@ -191,7 +191,7 @@ func TestRGDReconcileApply(t *testing.T) {
 
 // ── helpers ──────────────────────────────────────────────────────────────────
 
-// newWebAppRGD builds a representative RGD for the F3a test.
+// newWebAppRGD builds a representative RGD used by the apply/deletion tests.
 //   - Kind=WebApp, group=kro.run, version=v1alpha1
 //   - spec.name string
 //   - cm1: ConfigMap with data.app = ${schema.spec.name}

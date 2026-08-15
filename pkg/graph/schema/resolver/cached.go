@@ -28,10 +28,9 @@ import (
 // InvalidateGroupKind is called (typically by the schema watcher when
 // a CRD content change is observed).
 //
-// This replaces a prior time-based TTL strategy. With the schema
-// watcher firing precise invalidations on CRD changes, periodic
-// refetches are redundant — the cache is correct as long as we trust
-// the watcher to push every relevant change.
+// There is no time-based TTL: because the schema watcher fires precise
+// invalidations on CRD changes, periodic refetches are redundant. The cache
+// stays correct as long as the watcher pushes every relevant change.
 //
 // Concurrent fetches for the same GVK are deduplicated through
 // singleflight so the underlying delegate sees one call per unique

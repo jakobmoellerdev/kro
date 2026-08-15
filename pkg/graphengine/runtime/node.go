@@ -83,7 +83,8 @@ func (n *Node) Namespaced() bool { return n.spec.Namespaced }
 // time rather than read from the compiled spec.
 func (n *Node) DynamicGVK() bool { return n.spec.DynamicGVK }
 
-// IsCollection mirrors compiler.Node.IsCollection.
+// IsCollection reports whether the node expands into a collection,
+// delegating to compiler.Node.IsCollection.
 func (n *Node) IsCollection() bool { return n.spec.IsCollection() }
 
 // Observed returns the cluster-observed state for this node, or nil if
@@ -214,9 +215,8 @@ func (n *Node) CheckReadiness() error {
 //
 // Count gate: an empty observed set means either the collection legitimately
 // expanded to zero items (ready) or nothing has landed yet. Because the
-// graph-engine executor records observed = applied, an empty set here is a
-// resolved-empty collection and is treated as ready — mirroring classic
-// checkCollectionReadiness where len(desired)==0 short-circuits to ready.
+// executor records observed = applied, an empty set here is a
+// resolved-empty collection and is treated as ready.
 func (n *Node) checkCollectionReadiness() error {
 	if len(n.observed) == 0 {
 		return nil

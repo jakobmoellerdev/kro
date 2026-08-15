@@ -184,10 +184,9 @@ func (b *Builder) NewResourceGraphDefinition(originalCR *v1alpha1.ResourceGraphD
 // status stripped (status references are not allowed in RGD resource
 // expressions).
 //
-// Exported for the Graph-engine RGD adapter (F6): the adapter feeds this
-// schema into the Graph compiler as an override for the `schema` def node so
-// compile-time typing matches the classic builder instead of being inferred
-// from the current instance value.
+// Exported so graph consumers can bind this as the type of the `schema` CEL
+// variable, giving compile-time typing from the declared SimpleSchema rather
+// than from a runtime instance value.
 func InstanceSchemaForCEL(rgd *v1alpha1.ResourceGraphDefinition) (*spec.Schema, error) {
 	_, schemaWithoutStatus, _, err := synthesizeInstanceCRD(rgd)
 	return schemaWithoutStatus, err
@@ -791,8 +790,9 @@ func buildInstanceNode(
 
 // BuildInstanceSpecSchema converts an RGD Schema's SimpleSchema spec (and
 // optional custom types) into the OpenAPI JSONSchemaProps used to synthesize
-// the instance CRD. Exported so Graph-engine adapters can reuse the same
-// SimpleSchema → OpenAPI path without depending on unexported builder internals.
+// the instance CRD. Exported so graph consumers can reuse the same
+// SimpleSchema → OpenAPI conversion without depending on unexported builder
+// internals.
 func BuildInstanceSpecSchema(rgSchema *v1alpha1.Schema) (*extv1.JSONSchemaProps, error) {
 	return buildInstanceSpecSchema(rgSchema)
 }

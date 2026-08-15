@@ -18,12 +18,11 @@ import "github.com/kubernetes-sigs/kro/pkg/graph/parser"
 
 // ParseStatusExpressions is a thin exported wrapper around the package's
 // unexported extractConditionExpressions and the parser's ParseSchemalessResource,
-// exposed so pkg/graphengine/rgdadapter can project instance status without
-// duplicating parsing logic or importing unexported symbols.
+// exposed so graph consumers can project instance status without duplicating
+// parsing logic or importing unexported symbols.
 //
 // It takes a pre-unmarshalled status map (from RGD.Spec.Schema.Status.Raw),
-// mutates it to remove the `conditions:` key (matching the builder's
-// behaviour), and returns:
+// mutates it to remove the `conditions:` key, and returns:
 //   - fields: StatusFieldExpr list (path → raw CEL expression) for non-condition fields
 //   - conditionExprs: the raw "${...}" condition expression strings
 //   - noExprFields: paths that carry no CEL expression (callers may treat these as errors)
@@ -58,9 +57,9 @@ func ParseStatusExpressions(statusMap map[string]interface{}) (
 	return fields, conditionExprs, noExpr, nil
 }
 
-// StatusFieldExpr is the minimal representation of a status field that
-// pkg/graphengine/rgdadapter needs: a JSON-path location and the raw
-// (unwrapped, inner) CEL expression string.
+// StatusFieldExpr is the minimal representation of a status field a graph
+// consumer needs: a JSON-path location and the raw (unwrapped, inner) CEL
+// expression string.
 type StatusFieldExpr struct {
 	// Path is the dotted/bracketed JSON path of the status field
 	// (e.g. "readyName" or "nested.value").

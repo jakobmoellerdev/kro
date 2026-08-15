@@ -12,16 +12,15 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// Package rgdadapter is the RGD-on-Graph adapter: it synthesizes and
-// serves the instance CRD that a ResourceGraphDefinition currently owns
-// so an RGD can later run on the Graph engine.
+// Package rgdadapter synthesizes and serves the instance CRD that a
+// ResourceGraphDefinition owns, and runs its composition on the Graph
+// engine.
 //
-// A Graph is applied directly and has no CRD synthesis. For RGD to flip
-// onto Graph, something must still produce and own the instance CRD. This
-// package reuses pkg/graph + pkg/graph/crd + pkg/simpleschema + pkg/client
-// + pkg/metadata — it does not reimplement synthesis or CRD
-// create/update/diffing, and it does not run the instance controller or
-// compose resources.
+// A Graph is applied directly and has no CRD synthesis, so the adapter is
+// what produces and owns the instance CRD for an RGD. It reuses pkg/graph +
+// pkg/graph/crd + pkg/simpleschema + pkg/client + pkg/metadata rather than
+// reimplementing synthesis or CRD create/update/diffing, and it does not
+// run the instance controller or compose resources.
 package rgdadapter
 
 import (
@@ -43,9 +42,8 @@ import (
 
 // SynthesizeInstanceCRD builds the instance CRD for rgd from Spec.Schema
 // (SimpleSchema → OpenAPI, then crd.SynthesizeCRD) with an empty-status
-// placeholder. Status inference and default status fields are left to a
-// later increment — matching NewResourceGraphDefinition's pre-SetCRDStatus
-// CRD. Scope is taken from rgd.Spec.Schema.Scope.
+// placeholder; status inference and default status fields are set later by
+// EnsureInstanceCRD. Scope is taken from rgd.Spec.Schema.Scope.
 func SynthesizeInstanceCRD(rgd *v1alpha1.ResourceGraphDefinition) (*extv1.CustomResourceDefinition, error) {
 	if rgd == nil {
 		return nil, fmt.Errorf("resourcegraphdefinition is required")
@@ -78,8 +76,8 @@ func SynthesizeInstanceCRD(rgd *v1alpha1.ResourceGraphDefinition) (*extv1.Custom
 }
 
 // EnsureInstanceCRD synthesizes the instance CRD for rgd, stamps the kro
-// ownership labels (NewKROMetaLabeler + NewResourceGraphDefinitionLabeler,
-// matching ensureServingState), and applies it via crdClient.Ensure.
+// ownership labels (NewKROMetaLabeler + NewResourceGraphDefinitionLabeler),
+// and applies it via crdClient.Ensure.
 //
 // Ownership conflicts (a CRD already owned by a different RGD, or not
 // owned by kro at all) are refused by CRDClient.Ensure via
@@ -108,8 +106,9 @@ func EnsureInstanceCRD(
 
 	// SynthesizeInstanceCRD leaves an empty-status placeholder (no Type).
 	// The apiserver rejects object fields without a type, so stamp a typed
-	// empty object before serving. Default state/conditions stay deferred
-	// to SetCRDStatus after Graph-engine status inference.
+	// empty object before serving. The `false` argument omits the default
+	// state/conditions fields, which the Graph engine fills in via status
+	// inference.
 	crd.SetCRDStatus(synthesized, extv1.JSONSchemaProps{Type: "object"}, false)
 
 	if err := crdClient.Ensure(ctx, *synthesized, allowBreakingChanges); err != nil {
@@ -124,10 +123,9 @@ func EnsureInstanceCRD(
 }
 
 // DeleteInstanceCRD deletes the instance CRD for rgd if this RGD owns it.
-// The ownership check is replicated from cleanupResourceGraphDefinitionCRD
-// (that helper lives in the RGD controller package, which is too heavy to
-// import from the adapter). A CRD owned by a different RGD, or not owned
-// by kro, is left in place. Missing CRDs are a no-op.
+// The ownership check is duplicated here so the adapter need not import the
+// heavier RGD controller package. A CRD owned by a different RGD, or not
+// owned by kro, is left in place. Missing CRDs are a no-op.
 func DeleteInstanceCRD(
 	ctx context.Context,
 	crdClient kroclient.CRDClient,
@@ -169,9 +167,8 @@ func DeleteInstanceCRD(
 	return nil
 }
 
-// instanceCRDName mirrors extractCRDName in the RGD controller cleanup
-// path (pluralize(kind).group). Replicated here so the adapter does not
-// import the controller package.
+// instanceCRDName returns the instance CRD name as pluralize(kind).group.
+// Duplicated here so the adapter does not import the RGD controller package.
 func instanceCRDName(group, kind string) string {
 	return fmt.Sprintf("%s.%s",
 		flect.Pluralize(strings.ToLower(kind)),

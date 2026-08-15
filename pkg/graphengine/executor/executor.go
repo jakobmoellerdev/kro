@@ -33,7 +33,7 @@ import (
 const FieldManager = "kro-graphengine"
 
 // ErrUnsupported is returned when an executor refuses to handle a node kind
-// it does not implement yet (e.g. ref/watch in v1).
+// it does not implement.
 var ErrUnsupported = errors.New("executor: node kind not supported")
 
 // ErrNotReady is the sentinel an executor returns when one or more nodes
@@ -44,15 +44,15 @@ var ErrNotReady = errors.New("executor: node not ready")
 
 // ErrResourceDeleting is the sentinel signaling that a managed object an
 // executor wanted to apply is still terminating (has a deletionTimestamp).
-// It mirrors classic kro's resourceDeletingError: the node is held soft
-// not-ready so its dependents gate and the reconcile requeues, and it is
-// distinguishable so the reconciler can surface the "ResourceDeleting"
-// condition reason. It always also satisfies errors.Is(err, ErrNotReady).
+// The node is held soft not-ready so its dependents gate and the reconcile
+// requeues, and it is distinguishable so the reconciler can surface the
+// "ResourceDeleting" condition reason. It always also satisfies
+// errors.Is(err, ErrNotReady).
 var ErrResourceDeleting = errors.New("executor: resource is being deleted")
 
 // ResourceDeletingError carries the identity of a managed object that is
-// currently terminating so the reconciler can build a condition message
-// matching classic kro. Detect it with errors.Is(err, ErrResourceDeleting)
+// currently terminating so the reconciler can build a condition message.
+// Detect it with errors.Is(err, ErrResourceDeleting)
 // or extract it with errors.As(err, &*ResourceDeletingError). Its Is method
 // reports both ErrResourceDeleting (for the distinguishable terminating
 // signal) and ErrNotReady (so generic soft-not-ready handling gates
@@ -72,8 +72,8 @@ func (e *ResourceDeletingError) Error() string {
 }
 
 // ref renders "<namespace>/<name>" (or just "<name>" for cluster-scoped
-// objects), matching classic kro's resourceRef so the condition message
-// contains the exact `resource "<ns>/<name>"` substring specs assert on.
+// objects) so the condition message contains the exact
+// `resource "<ns>/<name>"` substring specs assert on.
 func (e *ResourceDeletingError) ref() string {
 	if e.Namespace == "" {
 		return e.Name
