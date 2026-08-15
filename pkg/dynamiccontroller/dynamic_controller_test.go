@@ -654,10 +654,10 @@ func TestEnqueueFromInformer_GenerationSkip(t *testing.T) {
 			expectQueue: 0,
 		},
 		{
-			name:        "same generation, reconcile disabled on new only — skips",
+			name:        "same generation, reconcile disabled on new only — enqueues",
 			oldObj:      makeObj("a", "default", 5, nil),
 			newObj:      makeObj("a", "default", 5, map[string]string{v1alpha1.InstanceReconcileAnnotation: "disabled"}),
-			expectQueue: 0,
+			expectQueue: 1,
 		},
 		{
 			name:        "same generation, reconcile re-enabled case-insensitive — enqueues",
@@ -725,7 +725,7 @@ func TestEnqueueFromInformer_NilNewObject(t *testing.T) {
 	assert.Equal(t, 0, dc.queue.Len(), "nil newObject should cause early return")
 }
 
-func TestReconcileEnabledInUpdate(t *testing.T) {
+func TestReconcileSuspensionChangedInUpdate(t *testing.T) {
 	makeObj := func(annotations map[string]string) *v1.PartialObjectMetadata {
 		obj := &v1.PartialObjectMetadata{}
 		obj.SetAnnotations(annotations)
@@ -761,7 +761,7 @@ func TestReconcileEnabledInUpdate(t *testing.T) {
 			name:   "enabled -> disabled",
 			old:    nil,
 			new:    map[string]string{v1alpha1.InstanceReconcileAnnotation: "disabled"},
-			expect: false,
+			expect: true,
 		},
 		{
 			name:   "case insensitive disabled",
@@ -792,7 +792,7 @@ func TestReconcileEnabledInUpdate(t *testing.T) {
 			name:   "enabled -> suspended",
 			old:    nil,
 			new:    map[string]string{v1alpha1.InstanceReconcileAnnotation: "suspended"},
-			expect: false,
+			expect: true,
 		},
 		{
 			name:   "case insensitive suspended",
@@ -823,7 +823,7 @@ func TestReconcileEnabledInUpdate(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result := reconcileEnabledInUpdate(makeObj(tt.old), makeObj(tt.new))
+			result := reconcileSuspensionChangedInUpdate(makeObj(tt.old), makeObj(tt.new))
 			assert.Equal(t, tt.expect, result)
 		})
 	}

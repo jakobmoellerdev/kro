@@ -457,11 +457,13 @@ func (dc *DynamicController) enqueueFromInformer(parentGVR schema.GroupVersionRe
 			return
 		}
 		if newMeta.GetGeneration() == oldMeta.GetGeneration() {
-			// Normally skip, but we should enqueue if the oldMeta had the reconcile disabled annotation, and the newMeta doesn't.
-			// This covers an edge case where the user only updates the reconcile annotation from disabled to enabled,
-			// which will trigger this func, but the generation won't change since it's a metadata-only update.
-			// We want to make sure this transition still triggers a reconciliation.
-			if !reconcileEnabledInUpdate(oldMeta, newMeta) {
+			// Normally skip metadata-only updates, but a change to the
+			// reconcile-suspended annotation does not bump generation yet must
+			// still trigger a reconcile: resuming (suspended->enabled) so the
+			// instance re-converges, and suspending (enabled->suspended) so the
+			// ReconciliationSuspended status is written promptly (the graph
+			// engine, unlike the classic path, does not periodically requeue).
+			if !reconcileSuspensionChangedInUpdate(oldMeta, newMeta) {
 				dc.log.V(2).Info("Skipping update due to unchanged generation",
 					"name", newMeta.GetName(), "namespace", newMeta.GetNamespace(), "generation", newMeta.GetGeneration())
 				return
@@ -477,10 +479,15 @@ func (dc *DynamicController) enqueueFromInformer(parentGVR schema.GroupVersionRe
 	})
 }
 
-func reconcileEnabledInUpdate(oldMeta, newMeta metav1.Object) bool {
+// reconcileSuspensionChangedInUpdate reports whether the reconcile-suspended
+// annotation flipped between the old and new object. It is symmetric: both
+// suspended->enabled and enabled->suspended transitions return true so each is
+// reconciled exactly once. A steadily-suspended (or steadily-enabled) instance
+// returns false, so it is not re-enqueued every metadata update.
+func reconcileSuspensionChangedInUpdate(oldMeta, newMeta metav1.Object) bool {
 	oldSuspended := v1alpha1.IsReconcileSuspended(oldMeta.GetAnnotations()[v1alpha1.InstanceReconcileAnnotation])
 	newSuspended := v1alpha1.IsReconcileSuspended(newMeta.GetAnnotations()[v1alpha1.InstanceReconcileAnnotation])
-	return oldSuspended && !newSuspended
+	return oldSuspended != newSuspended
 }
 
 // Deregister removes a parent GVR handler and cleans up coordinator state.
