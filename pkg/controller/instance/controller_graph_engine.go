@@ -21,6 +21,7 @@ package instance
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -30,6 +31,7 @@ import (
 	"github.com/kubernetes-sigs/kro/api/v1alpha1"
 	"github.com/kubernetes-sigs/kro/pkg/dynamiccontroller"
 	"github.com/kubernetes-sigs/kro/pkg/graph/revisions"
+	"github.com/kubernetes-sigs/kro/pkg/graphengine/executor"
 	"github.com/kubernetes-sigs/kro/pkg/graphengine/rgdadapter"
 	"github.com/kubernetes-sigs/kro/pkg/graphengine/watchrouter"
 	"github.com/kubernetes-sigs/kro/pkg/requeue"
@@ -155,6 +157,12 @@ func (c *Controller) reconcileViaGraphEngine(
 	}
 
 	// Return the apply error last so controller-runtime requeues if needed.
+	// Classify soft-not-ready as a requeue (like the old path with
+	// runtime.ErrWaitingForReadiness) instead of a hard reconcile failure —
+	// the executor signals "upstream not ready yet, retry" with ErrNotReady.
+	if applyErr != nil && errors.Is(applyErr, executor.ErrNotReady) {
+		return requeue.NeededAfter(applyErr, c.reconcileConfig.DefaultRequeueDuration)
+	}
 	return applyErr
 }
 
