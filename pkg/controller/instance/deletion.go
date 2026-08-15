@@ -32,7 +32,7 @@ import (
 
 // reconcileDeletion drives deletion workflow for an instance.
 func (c *Controller) reconcileDeletion(dcx *DeletionContext) error {
-	dcx.StateManager.State = v1alpha1.InstanceStateDeleting
+	dcx.State = v1alpha1.InstanceStateDeleting
 	dcx.Mark.ResourcesUnderDeletion("deleting resources")
 
 	candidates, applier, err := c.discoverDeletionInventory(dcx)

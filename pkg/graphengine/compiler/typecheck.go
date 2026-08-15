@@ -288,7 +288,7 @@ func celTypeFromSchema(bc *buildContext, s *spec.Schema, typeName string) *cel.T
 
 // validateAndCompileNode runs the type-checking + compilation pass for a
 // single node. The passed nodeSchema describes the publication shape for
-// Template nodes (i.e. the actual payload). For Ref/Watch/Def the payload
+// Template nodes (i.e. the actual payload). For Ref/Def the payload
 // doesn't match nodeSchema; callers pass nil to fall back to dyn.
 func validateAndCompileNode(bc *buildContext, n *Node, payloadSchema *spec.Schema, elementSchema *spec.Schema) error {
 	iteratorTypes, err := validateAndCompileForEach(bc, n)

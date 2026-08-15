@@ -333,7 +333,7 @@ func unmarshalGraphSpec(raw []byte) ([]expv1alpha1.Node, error) {
 // "which Graphs care about which CRDs."
 //
 // Def nodes contribute nothing — they don't reference cluster schemas.
-// Template/Ref/Watch nodes contribute their target GroupKind. A subgraph
+// Template/Ref nodes contribute their target GroupKind. A subgraph
 // node folds in its child Program's already-aggregated dependencies, so the
 // root Program ends up with the full set across every nesting level — the
 // SchemaWatcher tracks all of them.

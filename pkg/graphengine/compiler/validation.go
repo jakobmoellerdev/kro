@@ -94,8 +94,8 @@ func validateFrameNodes(nodes []expv1alpha1.Node) error {
 }
 
 // validateKindCompatibility rejects combinations that don't make sense for
-// a given node kind. ref and watch nodes can't carry forEach because they
-// don't render templates — they read existing state. graph (subgraph) nodes
+// a given node kind. ref nodes can't carry forEach because they don't render
+// templates — they read existing state. graph (subgraph) nodes
 // don't render or read; the per-node modifiers have no defined semantics on
 // them yet, so they're rejected explicitly rather than silently ignored.
 func validateKindCompatibility(n *expv1alpha1.Node) error {
@@ -113,8 +113,7 @@ func validateKindCompatibility(n *expv1alpha1.Node) error {
 	if len(n.ForEach) == 0 {
 		return nil
 	}
-	switch {
-	case n.Ref != nil:
+	if n.Ref != nil {
 		return fmt.Errorf("forEach is not supported on ref nodes")
 	}
 	return nil

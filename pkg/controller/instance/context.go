@@ -23,6 +23,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/client-go/dynamic"
 
+	"github.com/kubernetes-sigs/kro/api/v1alpha1"
 	"github.com/kubernetes-sigs/kro/pkg/requeue"
 )
 
@@ -43,8 +44,8 @@ type DeletionContext struct {
 
 	WireStatus map[string]interface{}
 
-	Mark         *ConditionsMarker
-	StateManager *StateManager
+	Mark  *ConditionsMarker
+	State v1alpha1.InstanceState
 }
 
 // NewDeletionContext constructs the runtime-free context used before graph
@@ -60,17 +61,17 @@ func NewDeletionContext(
 	instance *unstructured.Unstructured,
 ) *DeletionContext {
 	return &DeletionContext{
-		Ctx:          ctx,
-		Log:          log,
-		GVR:          gvr,
-		Namespaced:   namespaced,
-		Client:       client,
-		RestMapper:   restMapper,
-		Instance:     instance,
-		Config:       config,
-		WireStatus:   captureWireStatus(instance),
-		Mark:         NewConditionsMarkerFor(instance),
-		StateManager: newStateManager(),
+		Ctx:        ctx,
+		Log:        log,
+		GVR:        gvr,
+		Namespaced: namespaced,
+		Client:     client,
+		RestMapper: restMapper,
+		Instance:   instance,
+		Config:     config,
+		WireStatus: captureWireStatus(instance),
+		Mark:       NewConditionsMarkerFor(instance),
+		State:      v1alpha1.InstanceStateInProgress,
 	}
 }
 

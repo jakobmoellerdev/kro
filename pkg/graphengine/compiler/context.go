@@ -189,10 +189,10 @@ func (ctx *CompilationContext) buildNode(p *parser.Parser, n *expv1alpha1.Node, 
 		return ctx.buildDynamicTemplateNode(n, order, payload)
 	}
 
-	// Template/Ref/Watch all target a real GVK. Resolve schema and
+	// Template/Ref all target a real GVK. Resolve schema and
 	// REST mapping, then parse the payload for CEL fragments.
 	// Templates are user-authored manifests so we enforce metadata-shape
-	// strictly. Ref/Watch are synthesized from typed structs that don't
+	// strictly. Ref payloads are synthesized from typed structs that don't
 	// carry a metadata field — apiVersion + kind are still required.
 	if err := validateKubernetesObjectStructure(payload, kind == NodeKindTemplate); err != nil {
 		return nil, nil, err
@@ -389,7 +389,7 @@ func unmarshalRaw(raw []byte) (map[string]interface{}, error) {
 // object: apiVersion + kind set as non-empty strings and apiVersion's
 // version segment matches the Kubernetes versioning convention. When
 // requireMetadata is true the payload must also carry a metadata object —
-// this is true for user-authored Templates but false for Ref / Watch
+// this is true for user-authored Templates but false for Ref
 // payloads which are synthesized from typed structs.
 func validateKubernetesObjectStructure(obj map[string]interface{}, requireMetadata bool) error {
 	if obj == nil {

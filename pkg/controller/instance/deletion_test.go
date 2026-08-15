@@ -289,7 +289,7 @@ func TestReconcileDeletionDeletesAllAndRequeues(t *testing.T) {
 	err := controller.reconcileDeletion(rcx)
 	var retryAfter *requeue.RequeueNeededAfter
 	require.ErrorAs(t, err, &retryAfter)
-	assert.Equal(t, v1alpha1.InstanceStateDeleting, rcx.StateManager.State)
+	assert.Equal(t, v1alpha1.InstanceStateDeleting, rcx.State)
 	_, getErr := raw.Tracker().Get(controllerTestDeployGVR, "default", "demo")
 	require.Error(t, getErr)
 }

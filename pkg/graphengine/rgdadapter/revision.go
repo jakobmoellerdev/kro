@@ -80,7 +80,7 @@ func ResolveProgram(
 		return resolveWithFallback(reg, key, fmt.Errorf("rgdadapter: translate: %w", translateErr))
 	}
 
-	compiled, compileErr := c.Compile(g)
+	compiled, compileErr := c.CompileWithOptions(g)
 	if compileErr != nil {
 		return resolveWithFallback(reg, key, fmt.Errorf("rgdadapter: compile: %w", compileErr))
 	}

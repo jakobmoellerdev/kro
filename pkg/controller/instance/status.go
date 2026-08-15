@@ -185,19 +185,34 @@ func (c *Controller) updateConditionsStatus(ctx context.Context, inst *unstructu
 // runtime. Status projections and author conditions that cannot be evaluated
 // during early deletion are preserved from the wire.
 func (c *Controller) updateDeletionStatus(dcx *DeletionContext) error {
-	previousState, _ := dcx.WireStatus["state"].(string)
-	status := initialStatus(dcx.Instance, dcx.StateManager)
-	for k, v := range dcx.WireStatus {
+	return c.persistNodeFreeStatus(dcx.Ctx, dcx.InstanceClient(), dcx.Instance, dcx.WireStatus, dcx.State)
+}
+
+// persistNodeFreeStatus assembles and persists instance status for the two
+// engine-free paths (deletion and suspend). The caller must already have
+// stamped the built-in conditions onto inst via a ConditionsMarker. It carries
+// the wire status forward (minus conditions/state), applies the given
+// lifecycle state, preserves author conditions via deletionConditions when the
+// RGD owns the condition surface, and writes through the skip-identical
+// persistStatus guard.
+func (c *Controller) persistNodeFreeStatus(
+	ctx context.Context,
+	instanceClient dynamic.ResourceInterface,
+	inst *unstructured.Unstructured,
+	wireStatus map[string]interface{},
+	state v1alpha1.InstanceState,
+) error {
+	previousState, _ := wireStatus["state"].(string)
+	status := initialStatus(inst, state)
+	for k, v := range wireStatus {
 		if k != "conditions" && k != "state" {
 			status[k] = v
 		}
 	}
-	if dcx.Config.HasAuthorConditions {
-		status["conditions"] = deletionConditions(dcx.Instance, dcx.WireStatus)
+	if c.reconcileConfig.HasAuthorConditions {
+		status["conditions"] = deletionConditions(inst, wireStatus)
 	}
-	return c.persistStatus(
-		dcx.Ctx, dcx.InstanceClient(), dcx.Instance, dcx.WireStatus, status, previousState,
-	)
+	return c.persistStatus(ctx, instanceClient, inst, wireStatus, status, previousState)
 }
 
 // deletionConditions preserves author conditions that cannot be evaluated
@@ -317,7 +332,7 @@ func mergeWithPrevious(current, previous []v1alpha1.Condition) []v1alpha1.Condit
 	return current
 }
 
-func initialStatus(instance *unstructured.Unstructured, stateManager *StateManager) map[string]interface{} {
+func initialStatus(instance *unstructured.Unstructured, state v1alpha1.InstanceState) map[string]interface{} {
 	cs := condSet.For(&unstructuredWrapper{instance})
 
 	// Start fresh - user-defined status fields come solely from current
@@ -332,7 +347,7 @@ func initialStatus(instance *unstructured.Unstructured, stateManager *StateManag
 	if cs.IsRootReady() {
 		status["state"] = string(v1alpha1.InstanceStateActive)
 	} else {
-		status["state"] = string(stateManager.State)
+		status["state"] = string(state)
 	}
 	return status
 }
