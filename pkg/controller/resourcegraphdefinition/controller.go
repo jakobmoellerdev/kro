@@ -38,7 +38,6 @@ import (
 	"github.com/kubernetes-sigs/kro/api/v1alpha1"
 	kroclient "github.com/kubernetes-sigs/kro/pkg/client"
 	"github.com/kubernetes-sigs/kro/pkg/dynamiccontroller"
-	"github.com/kubernetes-sigs/kro/pkg/features"
 	"github.com/kubernetes-sigs/kro/pkg/graph"
 	"github.com/kubernetes-sigs/kro/pkg/graph/revisions"
 	"github.com/kubernetes-sigs/kro/pkg/graphengine/rgdadapter"
@@ -76,10 +75,9 @@ type ResourceGraphDefinitionReconciler struct {
 	registeredControllers sync.Map
 	cfg                   Config
 
-	// graphEngineCompiler is non-nil when features.RGDOnGraph is enabled.
-	// It is injected via WithGraphEngineCompiler after SetupWithManager so
-	// that the compiler shares the same REST config/HTTP client as the rest
-	// of the manager.  When the flag is off this field is always nil.
+	// graphEngineCompiler is injected via WithGraphEngineCompiler after
+	// SetupWithManager so that the compiler shares the same REST config/HTTP
+	// client as the rest of the manager.  It drives the instance reconcile path.
 	graphEngineCompiler rgdadapter.Compiler
 
 	newEventRecorder func(string) record.EventRecorder
@@ -167,17 +165,11 @@ func (r *ResourceGraphDefinitionReconciler) SetupWithManager(mgr ctrl.Manager) e
 		Complete(reconcile.AsReconciler[*v1alpha1.ResourceGraphDefinition](mgr.GetClient(), r))
 }
 
-// WithGraphEngineCompiler injects the graph-engine compiler that is used when
-// features.RGDOnGraph is enabled.  Call this after SetupWithManager so the
+// WithGraphEngineCompiler injects the graph-engine compiler used by the
+// instance micro-controllers.  Call this after SetupWithManager so the
 // compiler shares the manager's REST config and HTTP client.
 func (r *ResourceGraphDefinitionReconciler) WithGraphEngineCompiler(comp rgdadapter.Compiler) {
 	r.graphEngineCompiler = comp
-}
-
-// graphEngineEnabled reports whether the RGDOnGraph feature is active and the
-// compiler has been injected.  This is the guard for all graph-engine paths.
-func (r *ResourceGraphDefinitionReconciler) graphEngineEnabled() bool {
-	return features.FeatureGate.Enabled(features.RGDOnGraph) && r.graphEngineCompiler != nil
 }
 
 // resourceGraphDefinitionPrimaryWatchPredicate returns a predicate that decides

@@ -12,9 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// controller_graph_engine.go — F6a: flag-gated instance reconcile via the
-// Graph engine.  Enabled by features.RGDOnGraph (default off).  The existing
-// pkg/runtime reconcile path is untouched and runs when the flag is off.
+// controller_graph_engine.go — instance reconcile via the Graph engine.
+// This is the sole (non-deletion) reconcile path.
 
 package instance
 
@@ -46,8 +45,8 @@ import (
 )
 
 // reconcileViaGraphEngine is the Graph-engine reconcile path.  It is called
-// from Reconcile when features.RGDOnGraph is enabled and the instance is NOT
-// being deleted (deletion still uses the existing ApplySet/finalizer path).
+// from Reconcile for any instance that is NOT being deleted (deletion still
+// uses the ApplySet/finalizer path).
 //
 // Steps:
 //  1. Resolve the RGD spec from the revision registry (the graphrevision
@@ -106,7 +105,7 @@ func (c *Controller) reconcileViaGraphEngine(
 	}
 
 	//------------------------------------------------------------------
-	// 2. Guard: compiler must be wired (RGDOnGraph flag + compiler injection)
+	// 2. Guard: compiler must be wired (WithGraphEngineCompiler)
 	//------------------------------------------------------------------
 	if c.graphEngineCompiler == nil {
 		return fmt.Errorf("graph-engine: compiler not wired (WithGraphEngineCompiler not called); this is a programming error")
@@ -228,8 +227,8 @@ func (c *Controller) reconcileViaGraphEngine(
 	return applyErr
 }
 
-// reconcileViaRuntimeFallback is called when RGDOnGraph is on but the
-// revision entry pre-dates F6a (RGDSpec == nil).  It requeues so that once
+// reconcileViaRuntimeFallback is called when the revision entry pre-dates
+// F6a (RGDSpec == nil).  It requeues so that once
 // the graphrevision controller has processed the revision and populated RGDSpec
 // the instance picks up the Graph-engine path on the next cycle.
 func (c *Controller) reconcileViaRuntimeFallback(_ context.Context, _ *unstructured.Unstructured) error {

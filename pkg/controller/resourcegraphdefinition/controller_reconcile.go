@@ -210,19 +210,15 @@ func (r *ResourceGraphDefinitionReconciler) setupMicroController(
 		// recorder keyed by CRD name to uniquely identify the event source
 		r.newEventRecorder(fmt.Sprintf("kro/%s-controller", processedRGD.CRD.Name)),
 		// graphEngineClient: the controller-runtime client used by the Graph
-		// engine executor when RGDOnGraph is enabled.  r.Client is set by
-		// SetupWithManager, which always runs before the first micro-controller
-		// is created.  Nil-safe: NewController guards the executor behind the
-		// RGDOnGraph flag and never touches it when the flag is off.
+		// engine executor.  r.Client is set by SetupWithManager, which always
+		// runs before the first micro-controller is created.
 		r.Client,
 	)
 
-	// Wire the graph-engine compiler when the flag is on.  The compiler is
-	// injected separately (two-phase init) because it owns a rest.Config
-	// reference that the instance controller does not otherwise need.
-	if r.graphEngineEnabled() {
-		instCtrl.WithGraphEngineCompiler(r.graphEngineCompiler)
-	}
+	// Wire the graph-engine compiler.  The compiler is injected separately
+	// (two-phase init) because it owns a rest.Config reference that the
+	// instance controller does not otherwise need.
+	instCtrl.WithGraphEngineCompiler(r.graphEngineCompiler)
 	return instCtrl
 }
 

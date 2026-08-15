@@ -282,20 +282,17 @@ func main() {
 		os.Exit(1)
 	}
 
-	// When RGDOnGraph is enabled, build a graph-engine compiler and inject it
-	// into the RGD reconciler so micro-controllers can route instance
-	// reconciliation through the Graph engine.  The compiler is built here
-	// (post-SetupWithManager) so it shares restConfig + httpClient with the
-	// rest of the manager process.
-	if features.FeatureGate.Enabled(features.RGDOnGraph) {
-		setupLog.Info("RGDOnGraph feature enabled; injecting graph-engine compiler into RGD reconciler")
-		geCmp, err := compiler.NewCompiler(restConfig, set.HTTPClient())
-		if err != nil {
-			setupLog.Error(err, "unable to build graph-engine compiler for RGDOnGraph")
-			os.Exit(1)
-		}
-		rgd.WithGraphEngineCompiler(geCmp)
+	// Build a graph-engine compiler and inject it into the RGD reconciler so
+	// micro-controllers route instance reconciliation through the Graph engine.
+	// The compiler is built here (post-SetupWithManager) so it shares restConfig
+	// + httpClient with the rest of the manager process.
+	setupLog.Info("injecting graph-engine compiler into RGD reconciler")
+	geCmp, err := compiler.NewCompiler(restConfig, set.HTTPClient())
+	if err != nil {
+		setupLog.Error(err, "unable to build graph-engine compiler")
+		os.Exit(1)
 	}
+	rgd.WithGraphEngineCompiler(geCmp)
 
 	gv := graphrevisionctrl.NewGraphRevisionReconciler(
 		resourceGraphDefinitionGraphBuilder,

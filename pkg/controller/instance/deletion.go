@@ -23,12 +23,10 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/sets"
-	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/util/retry"
 
 	"github.com/kubernetes-sigs/kro/api/v1alpha1"
 	"github.com/kubernetes-sigs/kro/pkg/controller/instance/applyset"
-	"github.com/kubernetes-sigs/kro/pkg/graph"
 	"github.com/kubernetes-sigs/kro/pkg/metadata"
 )
 
@@ -142,18 +140,6 @@ func (c *Controller) removeFinalizer(dcx *DeletionContext) error {
 	}
 	dcx.Mark.ResourcesUnderDeletion("deleting resources")
 	return nil
-}
-
-// resourceClientFor returns a client scoped to the node's namespace rules.
-func resourceClientFor(
-	rcx *ReconcileContext,
-	desc graph.NodeMeta,
-	namespace string,
-) dynamic.ResourceInterface {
-	if desc.Namespaced {
-		return rcx.Client.Resource(desc.GVR).Namespace(namespace)
-	}
-	return rcx.Client.Resource(desc.GVR)
 }
 
 // setUnmanaged removes the instance finalizer using JSON merge patch with retry on conflict.
