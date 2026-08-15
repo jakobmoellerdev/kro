@@ -28,16 +28,16 @@ import (
 // mockResolver counts ResolveSchema invocations and hands back a
 // deterministic empty schema. Counts are atomic-safe for the
 // concurrent test row.
-type mockResolver struct {
+type pushMockResolver struct {
 	calls int32
 }
 
-func (m *mockResolver) ResolveSchema(_ schema.GroupVersionKind) (*spec.Schema, error) {
+func (m *pushMockResolver) ResolveSchema(_ schema.GroupVersionKind) (*spec.Schema, error) {
 	atomic.AddInt32(&m.calls, 1)
 	return &spec.Schema{SchemaProps: spec.SchemaProps{Type: []string{"object"}}}, nil
 }
 
-func (m *mockResolver) count() int { return int(atomic.LoadInt32(&m.calls)) }
+func (m *pushMockResolver) count() int { return int(atomic.LoadInt32(&m.calls)) }
 
 func gvk(group, version, kind string) schema.GroupVersionKind {
 	return schema.GroupVersionKind{Group: group, Version: version, Kind: kind}
@@ -52,13 +52,13 @@ func TestCachedSchemaResolver_Caching(t *testing.T) {
 	tests := []struct {
 		name      string
 		size      int
-		fetches   func(t *testing.T, c *CachedSchemaResolver, m *mockResolver)
+		fetches   func(t *testing.T, c *CachedSchemaResolver, m *pushMockResolver)
 		wantCalls int
 	}{
 		{
 			name: "single-gvk-repeated-fetch-hits-once",
 			size: 100,
-			fetches: func(t *testing.T, c *CachedSchemaResolver, _ *mockResolver) {
+			fetches: func(t *testing.T, c *CachedSchemaResolver, _ *pushMockResolver) {
 				k := gvk("apps", "v1", "Deployment")
 				for i := 0; i < 10; i++ {
 					_, err := c.ResolveSchema(k)
@@ -70,7 +70,7 @@ func TestCachedSchemaResolver_Caching(t *testing.T) {
 		{
 			name: "distinct-gvks-each-fetch-once",
 			size: 100,
-			fetches: func(t *testing.T, c *CachedSchemaResolver, _ *mockResolver) {
+			fetches: func(t *testing.T, c *CachedSchemaResolver, _ *pushMockResolver) {
 				for _, k := range []schema.GroupVersionKind{
 					gvk("apps", "v1", "Deployment"),
 					gvk("apps", "v1", "StatefulSet"),
@@ -87,7 +87,7 @@ func TestCachedSchemaResolver_Caching(t *testing.T) {
 		{
 			name: "concurrent-fetches-for-same-gvk-collapse-to-one",
 			size: 100,
-			fetches: func(t *testing.T, c *CachedSchemaResolver, _ *mockResolver) {
+			fetches: func(t *testing.T, c *CachedSchemaResolver, _ *pushMockResolver) {
 				k := gvk("apps", "v1", "Deployment")
 				var wg sync.WaitGroup
 				for i := 0; i < 50; i++ {
@@ -105,7 +105,7 @@ func TestCachedSchemaResolver_Caching(t *testing.T) {
 		{
 			name: "lru-evicts-oldest-then-refetches",
 			size: 3,
-			fetches: func(t *testing.T, c *CachedSchemaResolver, m *mockResolver) {
+			fetches: func(t *testing.T, c *CachedSchemaResolver, m *pushMockResolver) {
 				gvks := []schema.GroupVersionKind{
 					gvk("apps", "v1", "Deployment"), // oldest
 					gvk("apps", "v1", "StatefulSet"),
@@ -133,7 +133,7 @@ func TestCachedSchemaResolver_Caching(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			mock := &mockResolver{}
+			mock := &pushMockResolver{}
 			cached, err := NewCachedSchemaResolver(mock, tc.size)
 			require.NoError(t, err)
 			tc.fetches(t, cached, mock)
@@ -147,7 +147,7 @@ func TestCachedSchemaResolver_Caching(t *testing.T) {
 // schema content changes; this test confirms entries for that GK are
 // dropped (and entries for other GKs untouched).
 func TestCachedSchemaResolver_InvalidateGroupKind(t *testing.T) {
-	mock := &mockResolver{}
+	mock := &pushMockResolver{}
 	cached, err := NewCachedSchemaResolver(mock, 100)
 	require.NoError(t, err)
 
@@ -190,7 +190,7 @@ func TestCachedSchemaResolver_InvalidateGroupKind(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			// Fresh resolver per row so seed counts don't leak across.
-			mock := &mockResolver{}
+			mock := &pushMockResolver{}
 			cached, err := NewCachedSchemaResolver(mock, 100)
 			require.NoError(t, err)
 			for _, k := range tc.seed {
