@@ -169,6 +169,20 @@ func (c *Controller) reconcileViaGraphEngine(
 	switch {
 	case applyErr == nil:
 		mark.ResourcesReady()
+	case isResourceDeleting(applyErr):
+		// A managed resource is terminating (has a deletionTimestamp). Mirror
+		// classic kro: hold ResourcesReady=False with reason "ResourceDeleting"
+		// and a message naming the resource, keep the instance InProgress, and
+		// let the node gate its dependents (via GateReadiness) so the downstream
+		// resource is not created until deletion completes. Checked before the
+		// generic ErrNotReady branch because ResourceDeletingError satisfies
+		// both sentinels.
+		var delErr *executor.ResourceDeletingError
+		if errors.As(applyErr, &delErr) {
+			mark.ResourcesDeleting("%v", delErr)
+		} else {
+			mark.ResourcesDeleting("%v", applyErr)
+		}
 	case errors.Is(applyErr, executor.ErrNotReady):
 		// Soft: a node is waiting on data/readiness. State stays InProgress;
 		// child watch events (and the requeue below) drive the next cycle.
@@ -544,4 +558,15 @@ func (b *instanceWatcherBridge) Watch(req watchrouter.WatchRequest) error {
 
 func (b *instanceWatcherBridge) Done(commit bool) {
 	b.w.Done(commit)
+}
+
+// isResourceDeleting reports whether err (an executor apply error) signals a
+// managed resource that is currently terminating. It matches both the
+// distinguishable sentinel and the typed error the executor wraps.
+func isResourceDeleting(err error) bool {
+	if errors.Is(err, executor.ErrResourceDeleting) {
+		return true
+	}
+	var delErr *executor.ResourceDeletingError
+	return errors.As(err, &delErr)
 }

@@ -21,6 +21,7 @@ package executor
 import (
 	"context"
 	"errors"
+	"fmt"
 
 	expv1alpha1 "github.com/kubernetes-sigs/kro/api/v1alpha1"
 	"github.com/kubernetes-sigs/kro/pkg/graphengine/runtime"
@@ -40,6 +41,52 @@ var ErrUnsupported = errors.New("executor: node kind not supported")
 // reconciler treats this as a soft "requeue and retry" rather than a hard
 // error — the user's spec is fine, the cluster just hasn't converged yet.
 var ErrNotReady = errors.New("executor: node not ready")
+
+// ErrResourceDeleting is the sentinel signaling that a managed object an
+// executor wanted to apply is still terminating (has a deletionTimestamp).
+// It mirrors classic kro's resourceDeletingError: the node is held soft
+// not-ready so its dependents gate and the reconcile requeues, and it is
+// distinguishable so the reconciler can surface the "ResourceDeleting"
+// condition reason. It always also satisfies errors.Is(err, ErrNotReady).
+var ErrResourceDeleting = errors.New("executor: resource is being deleted")
+
+// ResourceDeletingError carries the identity of a managed object that is
+// currently terminating so the reconciler can build a condition message
+// matching classic kro. Detect it with errors.Is(err, ErrResourceDeleting)
+// or extract it with errors.As(err, &*ResourceDeletingError). Its Is method
+// reports both ErrResourceDeleting (for the distinguishable terminating
+// signal) and ErrNotReady (so generic soft-not-ready handling gates
+// dependents and requeues without a hard failure).
+type ResourceDeletingError struct {
+	NodeID    string
+	Namespace string
+	Name      string
+}
+
+func (e *ResourceDeletingError) Error() string {
+	return fmt.Sprintf(
+		"resource %q for node %q is currently being deleted; waiting for deletion to complete before continuing reconciliation",
+		e.ref(),
+		e.NodeID,
+	)
+}
+
+// ref renders "<namespace>/<name>" (or just "<name>" for cluster-scoped
+// objects), matching classic kro's resourceRef so the condition message
+// contains the exact `resource "<ns>/<name>"` substring specs assert on.
+func (e *ResourceDeletingError) ref() string {
+	if e.Namespace == "" {
+		return e.Name
+	}
+	return e.Namespace + "/" + e.Name
+}
+
+// Is makes the typed error satisfy both sentinels: ErrResourceDeleting for
+// the distinguishable terminating case and ErrNotReady so the executor's and
+// reconciler's generic soft-not-ready paths treat it as a requeue.
+func (e *ResourceDeletingError) Is(target error) bool {
+	return target == ErrResourceDeleting || target == ErrNotReady
+}
 
 // ApplyResult records what an Apply call observed. The Reconciler uses
 // it to drive the prune set: Applied lists entries whose identities we
