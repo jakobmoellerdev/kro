@@ -21,6 +21,7 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 
 	"github.com/kubernetes-sigs/kro/api/v1alpha1"
+	"github.com/kubernetes-sigs/kro/pkg/graph"
 	"github.com/kubernetes-sigs/kro/pkg/graphengine/compiler"
 	"github.com/kubernetes-sigs/kro/pkg/graphengine/runtime"
 )
@@ -30,6 +31,7 @@ import (
 // directly; tests may pass a narrower stub.
 type Compiler interface {
 	Compile(g *v1alpha1.Graph) (*compiler.Program, error)
+	CompileWithOptions(g *v1alpha1.Graph, opts ...compiler.CompileOption) (*compiler.Program, error)
 }
 
 // BuildRuntimeForInstance is the single adapter entrypoint that F6's
@@ -79,8 +81,19 @@ func BuildRuntimeForInstance(
 		Namespace: instance.GetNamespace(),
 	}
 
-	// Step 4: compile.
-	prog, err := c.Compile(g)
+	// Step 4: compile. The `schema` def node is typed from the RGD's
+	// declared SimpleSchema (override), not inferred from the current
+	// instance value — a fresh instance missing fields must still compile,
+	// and compile-time typing matches the classic builder.
+	var compileOpts []compiler.CompileOption
+	if rgd.Spec.Schema != nil {
+		schemaVarSchema, err := graph.InstanceSchemaForCEL(rgd)
+		if err != nil {
+			return nil, nil, fmt.Errorf("rgdadapter: instance schema: %w", err)
+		}
+		compileOpts = append(compileOpts, compiler.WithNodeSchemaOverride(SchemaNodeID, schemaVarSchema))
+	}
+	prog, err := c.CompileWithOptions(g, compileOpts...)
 	if err != nil {
 		return nil, nil, fmt.Errorf("rgdadapter: compile: %w", err)
 	}

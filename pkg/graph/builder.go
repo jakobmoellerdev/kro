@@ -197,6 +197,41 @@ func (b *Builder) NewResourceGraphDefinition(originalCR *v1alpha1.ResourceGraphD
 	return g, nil
 }
 
+// InstanceSchemaForCEL returns the OpenAPI schema bound to the `schema` CEL
+// variable when compiling expressions for the given RGD: the instance spec
+// converted from the RGD's SimpleSchema plus apiVersion/kind/metadata, with
+// status stripped (status references are not allowed in RGD resource
+// expressions).
+//
+// Exported for the Graph-engine RGD adapter (F6): the adapter feeds this
+// schema into the Graph compiler as an override for the `schema` def node so
+// compile-time typing matches the classic builder instead of being inferred
+// from the current instance value.
+func InstanceSchemaForCEL(rgd *v1alpha1.ResourceGraphDefinition) (*spec.Schema, error) {
+	if rgd.Spec.Schema == nil {
+		return nil, fmt.Errorf("resourcegraphdefinition %q: schema is required", rgd.Name)
+	}
+	instanceSpecSchema, err := buildInstanceSpecSchema(rgd.Spec.Schema)
+	if err != nil {
+		return nil, err
+	}
+	crdScope := extv1.NamespaceScoped
+	if rgd.Spec.Schema.Scope == v1alpha1.ResourceScopeCluster {
+		crdScope = extv1.ClusterScoped
+	}
+	instanceCRD := crd.SynthesizeCRD(
+		rgd.Spec.Schema.Group,
+		rgd.Spec.Schema.APIVersion,
+		rgd.Spec.Schema.Kind,
+		*instanceSpecSchema,
+		extv1.JSONSchemaProps{}, // empty status placeholder
+		false,                   // don't add default fields yet
+		crdScope,
+		rgd.Spec.Schema,
+	)
+	return getSchemaWithoutStatus(instanceCRD)
+}
+
 // rgdSource adapts a ResourceGraphDefinition's precomputed pieces to Source.
 type rgdSource struct {
 	resources       []ResourceSpec
