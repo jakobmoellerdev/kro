@@ -28,9 +28,11 @@ import (
 
 	"github.com/google/cel-go/cel"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apiserver/pkg/cel/openapi"
 
 	"github.com/kubernetes-sigs/kro/api/v1alpha1"
 	krocel "github.com/kubernetes-sigs/kro/pkg/cel"
+	celunstructured "github.com/kubernetes-sigs/kro/pkg/cel/unstructured"
 	"github.com/kubernetes-sigs/kro/pkg/cel/library"
 	"github.com/kubernetes-sigs/kro/pkg/graph"
 	"github.com/kubernetes-sigs/kro/pkg/graphengine/runtime"
@@ -95,9 +97,13 @@ func ProjectInstanceStatus(
 		return nil, fmt.Errorf("status projection: build env: %w", err)
 	}
 
+	// Use schema-aware scope so CEL sees correctly typed values
+	// (e.g. Secret.data as bytes for string(bytes) conversions).
+	saScope := schemaAwareScope(rt.Scope(), rt)
+
 	result := make(map[string]any, len(fields))
 	for _, f := range fields {
-		val, err := evalStatusExpr(env, rt.Scope(), f.Expression)
+		val, err := evalStatusExpr(env, saScope, f.Expression)
 		if err != nil {
 			return nil, fmt.Errorf("status projection: field %q: %w", f.Path, err)
 		}
@@ -160,8 +166,9 @@ func ProjectInstanceConditions(
 	}
 
 	// The evaluation scope must include the `runtime` singleton.
-	scope := make(map[string]any, len(rt.Scope())+1)
-	for k, v := range rt.Scope() {
+	saScope := schemaAwareScope(rt.Scope(), rt)
+	scope := make(map[string]any, len(saScope)+1)
+	for k, v := range saScope {
 		scope[k] = v
 	}
 	scope[library.RuntimeVarName] = library.RuntimeSingleton
@@ -179,6 +186,47 @@ func ProjectInstanceConditions(
 }
 
 // ── helpers ──────────────────────────────────────────────────────────────────
+
+// schemaAwareScope returns a copy of rawScope where each value that has a
+// corresponding OpenAPI schema in prog.NodeSchemas is wrapped with
+// celunstructured.UnstructuredToVal for schema-aware CEL type conversion
+// (e.g. Secret.data values are typed as bytes so string(bytes) works).
+// Values without a matching schema are passed through unchanged.
+func schemaAwareScope(rawScope map[string]any, rt *runtime.Runtime) map[string]any {
+	if rt == nil || rt.Program() == nil {
+		return rawScope
+	}
+	nodeSchemas := rt.Program().NodeSchemas
+	if len(nodeSchemas) == 0 {
+		return rawScope
+	}
+	out := make(map[string]any, len(rawScope))
+	for k, v := range rawScope {
+		sc, ok := nodeSchemas[k]
+		if !ok || sc == nil {
+			out[k] = v
+			continue
+		}
+		switch val := v.(type) {
+		case map[string]any:
+			out[k] = celunstructured.UnstructuredToVal(val, &openapi.Schema{Schema: sc})
+		case []any:
+			// Collection nodes: wrap each item.
+			list := make([]any, len(val))
+			for i, item := range val {
+				if m, ok := item.(map[string]any); ok {
+					list[i] = celunstructured.UnstructuredToVal(m, &openapi.Schema{Schema: sc})
+				} else {
+					list[i] = item
+				}
+			}
+			out[k] = list
+		default:
+			out[k] = v
+		}
+	}
+	return out
+}
 
 // unmarshalStatusRaw decodes RGD.Spec.Schema.Status.Raw into a map.
 // Returns (nil, nil) when no status block is defined.

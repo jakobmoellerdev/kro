@@ -23,17 +23,22 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sort"
+	"strings"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/client-go/util/retry"
 
 	"github.com/kubernetes-sigs/kro/api/v1alpha1"
+	"github.com/kubernetes-sigs/kro/pkg/controller/instance/applyset"
 	"github.com/kubernetes-sigs/kro/pkg/dynamiccontroller"
 	"github.com/kubernetes-sigs/kro/pkg/graph/revisions"
 	"github.com/kubernetes-sigs/kro/pkg/graphengine/executor"
 	"github.com/kubernetes-sigs/kro/pkg/graphengine/rgdadapter"
 	"github.com/kubernetes-sigs/kro/pkg/graphengine/watchrouter"
+	"github.com/kubernetes-sigs/kro/pkg/metadata"
 	"github.com/kubernetes-sigs/kro/pkg/requeue"
 )
 
@@ -108,6 +113,15 @@ func (c *Controller) reconcileViaGraphEngine(
 	}
 
 	//------------------------------------------------------------------
+	// 2.5. Stamp kro finalizer and management labels on the instance
+	//------------------------------------------------------------------
+	if patched, err := c.stampInstanceMetadata(ctx, inst); err != nil {
+		return err
+	} else if patched != nil {
+		inst = patched
+	}
+
+	//------------------------------------------------------------------
 	// 3. Build per-reconcile Runtime
 	//------------------------------------------------------------------
 	rt, _, err := rgdadapter.BuildRuntimeForInstance(rgd, inst, c.graphEngineCompiler)
@@ -123,8 +137,21 @@ func (c *Controller) reconcileViaGraphEngine(
 	//------------------------------------------------------------------
 	// 4. Apply through the executor (SSA + watches)
 	//------------------------------------------------------------------
+	// Build a per-reconcile child labeler: instance labels + applyset part-of
+	// + struct-level KRO-meta labels are composed inside ApplyWithLabeler.
+	instanceLabeler := metadata.NewInstanceLabeler(inst, c.namespaced)
+	applysetPartOf := applyset.ID(inst)
+	extraLabel := func(obj *unstructured.Unstructured) {
+		instanceLabeler.ApplyLabels(obj)
+		l := obj.GetLabels()
+		if l == nil {
+			l = map[string]string{}
+		}
+		l[applyset.ApplysetPartOfLabel] = applysetPartOf
+		obj.SetLabels(l)
+	}
 	bridge := &instanceWatcherBridge{w: dcWatcher}
-	applyResult, applyErr := c.graphEngineExecutor.Apply(ctx, rt, bridge)
+	applyResult, applyErr := c.graphEngineExecutor.ApplyWithLabeler(ctx, rt, bridge, extraLabel)
 
 	// Record managed resources on the instance status regardless of soft error.
 	// Hard errors abort before status patching.
@@ -134,7 +161,11 @@ func (c *Controller) reconcileViaGraphEngine(
 		log.V(1).Info("graph-engine: Apply returned error (may be soft)", "error", applyErr)
 	}
 
-	_ = applyResult // tracked by executor; F6b can plumb ManagedResources into ApplySet
+	// Stamp the ApplySet contains-group-kinds annotation on the instance so
+	// ApplySet inventory stays correct (needed by deletion and compat tests).
+	if gkErr := c.patchApplySetGKs(ctx, inst, applyResult.Applied); gkErr != nil {
+		log.V(1).Info("graph-engine: ApplySet GKs patch failed (non-fatal)", "error", gkErr)
+	}
 
 	//------------------------------------------------------------------
 	// 5. Project and patch instance status
@@ -175,6 +206,59 @@ func (c *Controller) reconcileViaRuntimeFallback(_ context.Context, _ *unstructu
 		fmt.Errorf("graph-engine: revision entry has no RGDSpec (pre-F6a entry); waiting for graphrevision controller to repopulate"),
 		c.reconcileConfig.DefaultRequeueDuration,
 	)
+}
+
+// patchApplySetGKs updates the ApplySet contains-group-kinds annotation on the
+// instance to reflect the set of GKs that the graph engine just applied.
+// It mirrors the patchInstanceWithApplySetMetadata logic from the old path.
+func (c *Controller) patchApplySetGKs(ctx context.Context, inst *unstructured.Unstructured, applied []v1alpha1.ManagedResource) error {
+	// Collect unique GKs from the applied resources.
+	gkSet := make(map[schema.GroupKind]struct{}, len(applied))
+	for _, r := range applied {
+		gv, err := schema.ParseGroupVersion(r.APIVersion)
+		if err != nil {
+			continue
+		}
+		gkSet[schema.GroupKind{Group: gv.Group, Kind: r.Kind}] = struct{}{}
+	}
+
+	// Build KEP-3659 annotation value: "Kind" for core, "Kind.group" otherwise.
+	gkStrings := make([]string, 0, len(gkSet))
+	for gk := range gkSet {
+		if gk.Group == "" {
+			gkStrings = append(gkStrings, gk.Kind)
+		} else {
+			gkStrings = append(gkStrings, fmt.Sprintf("%s.%s", gk.Kind, gk.Group))
+		}
+	}
+	sort.Strings(gkStrings)
+	gksValue := strings.Join(gkStrings, ",")
+
+	// Fast-path: if annotation is already correct, skip the write.
+	if inst.GetAnnotations()[applyset.ApplySetGKsAnnotation] == gksValue {
+		return nil
+	}
+
+	patchObj := instanceSSAPatch(inst)
+	anns := map[string]string{
+		applyset.ApplySetGKsAnnotation: gksValue,
+	}
+	patchObj.SetAnnotations(anns)
+
+	ri := c.client.Dynamic().Resource(c.gvr)
+	var instClient interface {
+		Apply(context.Context, string, *unstructured.Unstructured, metav1.ApplyOptions, ...string) (*unstructured.Unstructured, error)
+	}
+	if c.namespaced {
+		instClient = ri.Namespace(inst.GetNamespace())
+	} else {
+		instClient = ri
+	}
+	_, err := instClient.Apply(ctx, inst.GetName(), patchObj, metav1.ApplyOptions{
+		FieldManager: applyset.FieldManager + "-parent",
+		Force:        true,
+	})
+	return err
 }
 
 // patchGraphEngineStatus writes the projected status map and conditions onto
