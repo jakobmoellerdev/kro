@@ -37,9 +37,9 @@ import (
 	"github.com/kubernetes-sigs/kro/pkg/metadata"
 )
 
-// Simple is the v1 executor: walk nodes in topological order, SSA-apply
-// each Template, record observed state on the runtime so dependents see
-// the live cluster values, and on Delete tear them down in reverse.
+// Simple walks nodes in topological order, SSA-applies
+// each Template, records observed state on the runtime so dependents see
+// the live cluster values, and on Delete tears them down in reverse.
 //
 // Ignored nodes (includeWhen=false, or contagiously via an ignored
 // upstream) are skipped entirely — no resolve, no apply, no scope
@@ -52,10 +52,9 @@ type Simple struct {
 	// stamped by the graph-engine path. Safe to leave nil — no-op.
 	LabelInjector func(*unstructured.Unstructured)
 	// GateReadiness makes the executor withhold a node until every one of
-	// its dependencies has reached a terminal ready state this cycle
-	// (classic RGD ordering). When false (the default, used by the generic
-	// Graph engine), every reachable node is applied regardless of upstream
-	// readiness so drift watches register across a not-ready node.
+	// its dependencies has reached a terminal ready state this cycle. When
+	// false (the default), every reachable node is applied regardless of
+	// upstream readiness so drift watches register across a not-ready node.
 	GateReadiness bool
 }
 
@@ -127,9 +126,9 @@ var _ Interface = (*Simple)(nil)
 // was applied-but-not-ready, blocked, or unresolved leaves the dependent
 // blocked too — it is recorded Unresolved and skipped (never applied) so a
 // dependent resource is not created before its dependencies converge, and
-// its own dependents cascade-block via the readiness map. This mirrors
-// classic kro (RGD) ordering; it is a deliberate divergence from applying
-// every reachable node regardless of upstream readiness.
+// its own dependents cascade-block via the readiness map. Gating is opt-in
+// via GateReadiness; when it is off every reachable node is applied
+// regardless of upstream readiness.
 func (s *Simple) Apply(ctx context.Context, rt *runtime.Runtime, w watchrouter.Watcher) (ApplyResult, error) {
 	var result ApplyResult
 	var firstSoft error
@@ -166,10 +165,9 @@ func (s *Simple) Apply(ctx context.Context, rt *runtime.Runtime, w watchrouter.W
 			continue
 		}
 
-		// Gate on dependency readiness (classic RGD ordering): do not apply
-		// until every dependency is ready this cycle. Opt-in — the generic
-		// Graph engine leaves this off so dependents apply across a not-ready
-		// upstream (drift watches still register).
+		// Gate on dependency readiness: do not apply until every dependency is
+		// ready this cycle. Opt-in — when off, dependents apply across a
+		// not-ready upstream (drift watches still register).
 		if s.GateReadiness {
 			if dep, blocked := firstUnreadyDep(n, ready); blocked {
 				result.Unresolved = append(result.Unresolved, n.ID())
@@ -415,15 +413,15 @@ var errSchemaNotReady = errors.New("executor: target GVK not yet known to the cl
 // partial apply. Returns the resources that actually landed, even on a
 // later hard error, so the caller never loses tracking for them.
 //
-// Before SSA-applying each object the live object is fetched (mirroring
-// classic processRegularNode): if it exists with a deletionTimestamp the
+// Before SSA-applying each object the live object is fetched: if it exists
+// with a deletionTimestamp the
 // node is held soft not-ready via ResourceDeletingError so its dependents
 // gate and the reconcile requeues without recreating a resource that is
 // still terminating. External refs/collections are exempt (they are
 // read-only and handled by applyRef/applyRefCollection, not here).
 //
 // Collection nodes apply each item INDEPENDENTLY and tolerate per-item SSA
-// failures (mirroring classic's applyset per-item apply): a failure to
+// failures: a failure to
 // UPDATE an already-present item (e.g. an immutable field) does not abort
 // the node — the live object is recorded as applied so tracking/prune stay
 // correct and the node can still converge. A failure to CREATE an item that
@@ -471,7 +469,7 @@ func (s *Simple) applyTemplate(ctx context.Context, rt *runtime.Runtime, w watch
 			}
 		}
 
-		// Fetch the live object (classic parity): a hard GET error aborts,
+		// Fetch the live object: a hard GET error aborts,
 		// NotFound means the object is absent (current == nil).
 		current, err := s.getLive(ctx, obj)
 		if err != nil {
@@ -496,7 +494,7 @@ func (s *Simple) applyTemplate(ctx context.Context, rt *runtime.Runtime, w watch
 				// Scalar Template: an SSA failure is a hard error, unchanged.
 				return applied, err
 			}
-			// Collection per-item tolerance (classic applyset parity).
+			// Collection per-item tolerance.
 			if current != nil {
 				// The object already exists; only the UPDATE was rejected
 				// (e.g. an immutable field). It is present in the cluster, so
@@ -548,14 +546,13 @@ func (s *Simple) getLive(ctx context.Context, obj *unstructured.Unstructured) (*
 	return live, nil
 }
 
-// stampKROMeta stamps the classic-runtime identity metadata the graph-engine
-// path would otherwise drop: the kro.run/node-id label (used by selectors and
+// stampKROMeta stamps the identity metadata kro relies on: the
+// kro.run/node-id label (used by selectors and
 // managed-resource discovery) and the internal.kro.run/apply-order annotation
 // (the reverse-topological deletion wave read by the instance deletion path).
 // For collection items it also stamps the collection-index / collection-size
-// labels (index within the expansion, total item count) matching classic
-// NewCollectionItemLabeler. Per-instance labels are added separately by the
-// executor's LabelInjector.
+// labels (index within the expansion, total item count). Per-instance labels
+// are added separately by the executor's LabelInjector.
 func stampKROMeta(rt *runtime.Runtime, n *runtime.Node, obj *unstructured.Unstructured, index, size int) {
 	labels := obj.GetLabels()
 	if labels == nil {
@@ -618,16 +615,16 @@ func (s *Simple) applyRef(ctx context.Context, w watchrouter.Watcher, rt *runtim
 
 // applyRefCollection reads the read-only COLLECTION of external objects a
 // selector externalRef points at and returns their live cluster state for
-// publication into scope. It mirrors the classic observeExternalCollection:
-// resolve the label selector off the rendered ExternalRef, register ONE
-// selector-based watch keyed by NodeID, list the GVR by that selector, and
-// publish the matched objects. A selector ref is READ-ONLY: kro never applies,
+// publication into scope. It resolves the label selector off the rendered
+// ExternalRef, registers ONE
+// selector-based watch keyed by NodeID, lists the GVR by that selector, and
+// publishes the matched objects. A selector ref is READ-ONLY: kro never applies,
 // owns, or prunes the matched objects, so the caller must NOT record them in
 // ApplyResult.Applied.
 //
 // Namespace handling deliberately skips defaultNamespace: an empty
-// metadata.namespace for a namespaced GVR means "list across ALL namespaces"
-// (matching classic external-collection semantics), not "the instance's
+// metadata.namespace for a namespaced GVR means "list across ALL namespaces",
+// not "the instance's
 // namespace". An empty selector lists everything. A List error is hard; an
 // empty result is valid (an empty collection, treated as ready).
 func (s *Simple) applyRefCollection(ctx context.Context, w watchrouter.Watcher, rt *runtime.Runtime, n *runtime.Node, desired []*unstructured.Unstructured) ([]*unstructured.Unstructured, error) {
@@ -646,8 +643,8 @@ func (s *Simple) applyRefCollection(ctx context.Context, w watchrouter.Watcher, 
 
 	// Namespace comes straight from the rendered ExternalRef. For a namespaced
 	// GVR an empty namespace lists across all namespaces; cluster-scoped GVRs
-	// are always list-all. No defaultNamespace — classic explicitly skips
-	// namespace normalization for external collections.
+	// are always list-all. No defaultNamespace: namespace normalization is
+	// intentionally skipped for external collections.
 	ns := ref.GetNamespace()
 	if !n.Namespaced() {
 		ns = ""
@@ -655,8 +652,7 @@ func (s *Simple) applyRefCollection(ctx context.Context, w watchrouter.Watcher, 
 
 	// Register the selector watch BEFORE the list so a matching object that
 	// appears between the list and watch registration still re-enqueues the
-	// Graph. The watch is keyed by NodeID with the user's label selector
-	// (matching classic requestCollectionWatch).
+	// Graph. The watch is keyed by NodeID with the user's label selector.
 	if w != nil {
 		if err := w.Watch(watchrouter.WatchRequest{
 			NodeID:    n.ID(),
@@ -687,8 +683,7 @@ func (s *Simple) applyRefCollection(ctx context.Context, w watchrouter.Watcher, 
 
 // refCollectionSelector extracts the label selector from a rendered
 // external-collection ExternalRef. A missing or empty metadata.selector means
-// "select everything" (labels.Everything), matching the classic
-// resolveExternalCollectionSelector semantics.
+// "select everything" (labels.Everything).
 func refCollectionSelector(id string, ref *unstructured.Unstructured) (labels.Selector, error) {
 	selectorRaw, found, err := unstructured.NestedMap(ref.Object, "metadata", "selector")
 	if err != nil || !found {

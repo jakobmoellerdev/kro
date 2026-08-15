@@ -74,11 +74,10 @@ type Reconciler struct {
 
 // Reconcile is the main reconcile loop for Graph objects.
 //
-// The shape mirrors kro's RGD controller: deletion handling first, then
-// ensure the finalizer is set, run the reconcile body, and finally publish
-// status (with a single retry-on-conflict patch). Each path writes its
-// condition via the typed ConditionsMarker — never touches Status.Conditions
-// directly.
+// Order: deletion handling first, then ensure the finalizer is set, run the
+// reconcile body, and finally publish status (with a single
+// retry-on-conflict patch). Each path writes its condition via the typed
+// ConditionsMarker — never touches Status.Conditions directly.
 func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	logger := log.FromContext(ctx).WithValues("graph", req.NamespacedName)
 
@@ -289,8 +288,8 @@ func (r *Reconciler) setManaged(ctx context.Context, g *expv1alpha1.Graph) error
 }
 
 // setUnmanaged drops the Graph finalizer if present so the API server can
-// complete deletion. Today there is no in-cluster state owned by the Graph;
-// when a runtime is wired in, additional cleanup will run before this.
+// complete deletion. The deletion path removes managed resources before
+// calling this.
 func (r *Reconciler) setUnmanaged(ctx context.Context, g *expv1alpha1.Graph) error {
 	if !metadata.HasGraphFinalizer(g) {
 		return nil

@@ -16,9 +16,8 @@
 // for arbitrary GVRs and routes their events back to the Graph that
 // declared a watch.
 //
-// The shape is intentionally simpler than kro's equivalent: there is no
-// parent CRD generated per RGD — the Graph is the only owner the
-// coordinator knows about. controller-runtime watches the Graph itself;
+// There is no parent CRD generated per Graph — the Graph is the only owner
+// the coordinator knows about. controller-runtime watches the Graph itself;
 // this package only handles the child/observed resources.
 //
 // Lifecycle:

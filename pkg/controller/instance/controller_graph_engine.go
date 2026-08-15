@@ -12,8 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// controller_graph_engine.go — instance reconcile via the Graph engine.
-// This is the sole (non-deletion) reconcile path.
+// controller_graph_engine.go — reconciles a non-deleting instance through the
+// Graph engine.
 
 package instance
 
@@ -44,13 +44,11 @@ import (
 	"github.com/kubernetes-sigs/kro/pkg/requeue"
 )
 
-// reconcileViaGraphEngine is the Graph-engine reconcile path.  It is called
-// from Reconcile for any instance that is NOT being deleted (deletion still
-// uses the ApplySet/finalizer path).
+// reconcileViaGraphEngine reconciles a non-deleting instance. Deletion uses the
+// ApplySet/finalizer path instead.
 //
 // Steps:
-//  1. Resolve the RGD spec from the revision registry (the graphrevision
-//     controller stores it as Entry.RGDSpec since F6a).
+//  1. Resolve the RGD spec from the revision registry.
 //  2. Build a per-reconcile Runtime via rgdadapter.BuildRuntimeForInstance.
 //  3. Apply all Graph nodes via the executor.Simple, wired to the instance's
 //     dynamiccontroller.InstanceWatcher (via instanceWatcherBridge).
@@ -59,9 +57,9 @@ import (
 //  5. Project author conditions via rgdadapter.ProjectInstanceConditions and
 //     merge them into the status patch.
 //
-// Error policy mirrors the old path: hard errors propagate to controller-runtime
-// for requeue-with-backoff; ErrNotReady from the executor is a soft signal that
-// the call succeeds but the instance stays in InProgress.
+// Error policy: hard errors propagate to controller-runtime for
+// requeue-with-backoff; ErrNotReady from the executor is a soft signal that the
+// call succeeds but the instance stays in InProgress.
 func (c *Controller) reconcileViaGraphEngine(
 	ctx context.Context,
 	inst *unstructured.Unstructured,
@@ -73,9 +71,7 @@ func (c *Controller) reconcileViaGraphEngine(
 		"path", "graph-engine",
 	)
 
-	//------------------------------------------------------------------
-	// 1. Resolve RGD spec from the revision registry
-	//------------------------------------------------------------------
+	// Resolve the RGD spec from the revision registry.
 	latest, ok := c.graphResolver.GetLatestRevision()
 	if !ok {
 		return requeue.NeededAfter(
@@ -90,10 +86,10 @@ func (c *Controller) reconcileViaGraphEngine(
 		)
 	}
 	if latest.RGDSpec == nil {
-		// A revision compiled before F6a doesn't carry RGDSpec. There is no
-		// engine to run yet — requeue until the graphrevision controller
-		// reprocesses the revision and repopulates it.
-		log.V(1).Info("graph-engine: RGDSpec not available in revision (pre-F6a entry); requeueing until repopulated")
+		// The revision doesn't carry an RGDSpec, so there is no engine to run
+		// yet — requeue until the graphrevision controller reprocesses the
+		// revision and populates it.
+		log.V(1).Info("graph-engine: RGDSpec not available in revision; requeueing until the graphrevision controller repopulates it")
 		return c.requeueUntilRGDSpecPopulated(ctx, inst)
 	}
 
@@ -104,16 +100,12 @@ func (c *Controller) reconcileViaGraphEngine(
 		Spec: *latest.RGDSpec,
 	}
 
-	//------------------------------------------------------------------
-	// 2. Guard: compiler must be wired (WithGraphEngineCompiler)
-	//------------------------------------------------------------------
+	// Guard: the compiler must be wired via WithGraphEngineCompiler.
 	if c.graphEngineCompiler == nil {
 		return fmt.Errorf("graph-engine: compiler not wired (WithGraphEngineCompiler not called); this is a programming error")
 	}
 
-	//------------------------------------------------------------------
-	// 2.5. Stamp kro finalizer and management labels on the instance
-	//------------------------------------------------------------------
+	// Stamp the kro finalizer and management labels on the instance.
 	if patched, err := c.stampInstanceMetadata(ctx, inst); err != nil {
 		return err
 	} else if patched != nil {
@@ -126,9 +118,7 @@ func (c *Controller) reconcileViaGraphEngine(
 	mark := NewConditionsMarkerFor(inst)
 	mark.InstanceManaged()
 
-	//------------------------------------------------------------------
-	// 3. Build per-reconcile Runtime
-	//------------------------------------------------------------------
+	// Build a per-reconcile Runtime.
 	rt, _, err := rgdadapter.BuildRuntimeForInstance(rgd, inst, c.graphEngineCompiler)
 	if err != nil {
 		log.Error(err, "graph-engine: BuildRuntimeForInstance failed")
@@ -139,9 +129,7 @@ func (c *Controller) reconcileViaGraphEngine(
 	}
 	mark.GraphResolved()
 
-	//------------------------------------------------------------------
-	// 4. Apply through the executor (SSA + watches)
-	//------------------------------------------------------------------
+	// Apply through the executor (SSA + watches).
 	// Build a per-reconcile child labeler: instance labels + applyset part-of
 	// + struct-level KRO-meta labels are composed inside ApplyWithLabeler.
 	instanceLabeler := metadata.NewInstanceLabeler(inst, c.namespaced)
@@ -149,7 +137,7 @@ func (c *Controller) reconcileViaGraphEngine(
 	applysetPartOf := applyset.ID(inst)
 	extraLabel := func(obj *unstructured.Unstructured) {
 		instanceLabeler.ApplyLabels(obj)
-		// app.kubernetes.io/managed-by=kro, matching the classic child labeler.
+		// app.kubernetes.io/managed-by=kro.
 		nodeLabeler.ApplyLabels(obj)
 		l := obj.GetLabels()
 		if l == nil {
@@ -166,13 +154,13 @@ func (c *Controller) reconcileViaGraphEngine(
 	case applyErr == nil:
 		mark.ResourcesReady()
 	case isResourceDeleting(applyErr):
-		// A managed resource is terminating (has a deletionTimestamp). Mirror
-		// classic kro: hold ResourcesReady=False with reason "ResourceDeleting"
-		// and a message naming the resource, keep the instance InProgress, and
-		// let the node gate its dependents (via GateReadiness) so the downstream
-		// resource is not created until deletion completes. Checked before the
-		// generic ErrNotReady branch because ResourceDeletingError satisfies
-		// both sentinels.
+		// A managed resource is terminating (has a deletionTimestamp). Hold
+		// ResourcesReady=False with reason "ResourceDeleting" and a message
+		// naming the resource, keep the instance InProgress, and let the node
+		// gate its dependents (via GateReadiness) so the downstream resource is
+		// not created until deletion completes. Checked before the generic
+		// ErrNotReady branch because ResourceDeletingError satisfies both
+		// sentinels.
 		var delErr *executor.ResourceDeletingError
 		if errors.As(applyErr, &delErr) {
 			mark.ResourcesDeleting("%v", delErr)
@@ -200,11 +188,8 @@ func (c *Controller) reconcileViaGraphEngine(
 		log.V(1).Info("graph-engine: ApplySet inventory/prune failed (non-fatal)", "error", invErr)
 	}
 
-	//------------------------------------------------------------------
-	// 5. Project status fields and persist the full status (built-in
-	//    conditions + projected fields + author conditions), skip-write
-	//    guarded by statusesMatch.
-	//------------------------------------------------------------------
+	// Project status fields and persist the full status (built-in conditions +
+	// projected fields + author conditions), skip-write guarded by statusesMatch.
 	statusFields, projErr := rgdadapter.ProjectInstanceStatus(rt, rgd)
 	if projErr != nil {
 		log.Error(projErr, "graph-engine: status projection failed")
@@ -216,21 +201,20 @@ func (c *Controller) reconcileViaGraphEngine(
 		return err
 	}
 
-	// Classify soft-not-ready as a requeue (like the old path with
-	// runtime.ErrWaitingForReadiness) instead of a hard reconcile failure.
+	// Classify soft-not-ready as a requeue instead of a hard reconcile failure.
 	if applyErr != nil && errors.Is(applyErr, executor.ErrNotReady) {
 		return requeue.NeededAfter(applyErr, c.reconcileConfig.DefaultRequeueDuration)
 	}
 	return applyErr
 }
 
-// requeueUntilRGDSpecPopulated handles a revision entry that pre-dates F6a
-// (RGDSpec == nil). There is no engine to run yet, so it requeues until the
-// graphrevision controller reprocesses the revision and populates RGDSpec, at
-// which point the instance picks up the Graph-engine path on the next cycle.
+// requeueUntilRGDSpecPopulated handles a revision entry with no RGDSpec. There
+// is no engine to run yet, so it requeues until the graphrevision controller
+// reprocesses the revision and populates RGDSpec, at which point the instance
+// reconciles on the next cycle.
 func (c *Controller) requeueUntilRGDSpecPopulated(_ context.Context, _ *unstructured.Unstructured) error {
 	return requeue.NeededAfter(
-		fmt.Errorf("graph-engine: revision entry has no RGDSpec (pre-F6a entry); waiting for graphrevision controller to repopulate"),
+		fmt.Errorf("graph-engine: revision entry has no RGDSpec; waiting for the graphrevision controller to repopulate it"),
 		c.reconcileConfig.DefaultRequeueDuration,
 	)
 }
@@ -249,7 +233,7 @@ func (c *Controller) requeueUntilRGDSpecPopulated(_ context.Context, _ *unstruct
 // we must never prune while anything is unresolved, or we would delete
 // still-wanted members that were merely omitted from Applied this cycle.  Only
 // after a conflict-free prune that actually removed orphans do we shrink the
-// inventory to the exact current set, mirroring classic pruneOrphans.
+// inventory to the exact current set.
 func (c *Controller) reconcileApplySetInventory(
 	ctx context.Context,
 	log logr.Logger,
@@ -378,8 +362,8 @@ func (c *Controller) pruneGraphEngineOrphans(
 
 	// Delete dependents before dependencies: sort by the persisted apply-order
 	// annotation descending.  Unmapped/invalid orders sort first (treated as
-	// the highest wave), matching classic prune's handling of nodes removed
-	// from the graph entirely.
+	// the highest wave) so nodes removed from the graph entirely are deleted
+	// first.
 	sort.SliceStable(candidates, func(i, j int) bool {
 		return orphanApplyOrder(candidates[i]) > orphanApplyOrder(candidates[j])
 	})
@@ -465,12 +449,12 @@ func inventoryUpToDate(inst *unstructured.Unstructured, wantLabels, wantAnnotati
 	return true
 }
 
-// persistGraphEngineStatus composes the wire status for the Graph-engine path
-// and persists it through persistStatus, reusing statusesMatch skip-write and
-// state-transition metrics. It mirrors updateStatus: built-in conditions and
-// state come from the marker-mutated instance, projected fields merge in, and
-// author conditions (when the RGD declares them) replace the built-ins after
-// stamping and merging with the previous cycle.
+// persistGraphEngineStatus composes the wire status for the instance and
+// persists it through persistStatus, reusing statusesMatch skip-write and
+// state-transition metrics. Built-in conditions and state come from the
+// marker-mutated instance, projected fields merge in, and author conditions
+// (when the RGD declares them) replace the built-ins after stamping and merging
+// with the previous cycle.
 //
 // statusFields == nil preserves the non-condition/state fields already on the
 // wire. degraded forces state=Error regardless of condition readiness.

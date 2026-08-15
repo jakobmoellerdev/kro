@@ -33,8 +33,8 @@ type Compiler interface {
 	CompileWithOptions(g *v1alpha1.Graph, opts ...compiler.CompileOption) (*compiler.Program, error)
 }
 
-// BuildRuntimeForInstance is the single adapter entrypoint that F6's
-// controller will call for every reconcile cycle:
+// BuildRuntimeForInstance is the single adapter entrypoint the instance
+// controller calls for every reconcile cycle:
 //
 //  1. Translate the RGD's resources into a Graph (ResourceGraphDefinitionToGraph).
 //  2. Prepend an InstanceSchemaNode so ${schema.spec.*} references resolve.
@@ -82,8 +82,7 @@ func BuildRuntimeForInstance(
 
 	// Step 4: compile. The `schema` def node is typed from the RGD's
 	// declared SimpleSchema (override), not inferred from the current
-	// instance value — a fresh instance missing fields must still compile,
-	// and compile-time typing matches the classic builder.
+	// instance value — a fresh instance missing fields must still compile.
 	var compileOpts []compiler.CompileOption
 	if rgd.Spec.Schema != nil {
 		schemaVarSchema, err := graph.InstanceSchemaForCEL(rgd)

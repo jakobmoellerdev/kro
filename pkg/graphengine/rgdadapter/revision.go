@@ -25,7 +25,7 @@ import (
 	"github.com/kubernetes-sigs/kro/pkg/graphengine/registry"
 )
 
-// ResolveProgram is the last-good-config entrypoint for the RGD-on-Graph path.
+// ResolveProgram is the last-good-config entrypoint for the RGD adapter.
 //
 // It maps an RGD spec revision onto a compiled Program using the following
 // logic:

@@ -74,12 +74,12 @@ func TestBuildRuntimeForInstance_NoResources(t *testing.T) {
 	assert.Equal(t, SchemaNodeID, g.Spec.Nodes[0].ID)
 }
 
-// TestReconcileParity_SchemaAndCrossNode is the F1 seam proof: an RGD with two
+// TestReconcileParity_SchemaAndCrossNode verifies that an RGD with two
 // template resources — one reading the instance via ${schema.spec.*}, the other
 // reading the first via cross-node CEL — is translated to a Graph, the instance
-// is injected as a `schema` def node, and the Graph engine compiler+runtime
-// resolve both references. This proves RGD composition (instance scope +
-// inter-node wiring) runs on the Graph engine.
+// is injected as a `schema` def node, and the compiler+runtime resolve both
+// references. This covers RGD composition: instance scope plus inter-node
+// wiring.
 func TestReconcileParity_SchemaAndCrossNode(t *testing.T) {
 	rgd := &v1alpha1.ResourceGraphDefinition{
 		ObjectMeta: metav1.ObjectMeta{Name: "webapp"},
@@ -155,11 +155,9 @@ func TestReconcileParity_SchemaAndCrossNode(t *testing.T) {
 	assert.Equal(t, "cm1", nestedString(t, cm2Objs[0].Object, "data", "ref"))
 }
 
-// ── F2 parity tests ─────────────────────────────────────────────────────────
-
-// TestReconcileParity_ForEach proves that an RGD resource carrying a forEach
-// dimension translates to a Graph template node and the Graph runtime expands
-// it into one rendered object per list element (scoreboard rows 4, 5).
+// TestReconcileParity_ForEach verifies that an RGD resource carrying a forEach
+// dimension translates to a Graph template node and the runtime expands it into
+// one rendered object per list element.
 func TestReconcileParity_ForEach(t *testing.T) {
 	rgd := &v1alpha1.ResourceGraphDefinition{
 		ObjectMeta: metav1.ObjectMeta{Name: "fortest"},
@@ -229,9 +227,9 @@ func TestReconcileParity_ForEach(t *testing.T) {
 	assert.Equal(t, "b", nestedString(t, entryObjs[1].Object, "data", "label"))
 }
 
-// TestReconcileParity_IncludeWhen proves that an RGD resource with
+// TestReconcileParity_IncludeWhen verifies that an RGD resource with
 // includeWhen translates to a Graph node whose IsIgnored reflects the
-// condition value at runtime (scoreboard rows 7, 8, 9).
+// condition value at runtime.
 func TestReconcileParity_IncludeWhen(t *testing.T) {
 	makeRGD := func() *v1alpha1.ResourceGraphDefinition {
 		return &v1alpha1.ResourceGraphDefinition{
@@ -315,15 +313,15 @@ func TestReconcileParity_IncludeWhen(t *testing.T) {
 	})
 }
 
-// TestReconcileParity_ReadyWhen proves that an RGD resource with readyWhen
+// TestReconcileParity_ReadyWhen verifies that an RGD resource with readyWhen
 // translates to a Graph node whose compiled readyWhen expressions are
 // present. We assert: (a) compile succeeds, (b) before SetObserved the node
 // returns ErrWaitingForReadiness, (c) after SetObserved with the condition
-// met the node reports ready (scoreboard rows 10, 11, 13).
+// met the node reports ready.
 //
-// NOTE: full readiness-gate behaviour (observed cluster state driving
-// re-queue) requires the executor; this test proves the translation +
-// compile + runtime gate only. The executor gap is tracked in F3+.
+// This test covers translation + compile + the runtime readiness gate. The
+// end-to-end readiness behaviour driven by observed cluster state is exercised
+// by the integration suites.
 func TestReconcileParity_ReadyWhen(t *testing.T) {
 	rgd := &v1alpha1.ResourceGraphDefinition{
 		ObjectMeta: metav1.ObjectMeta{Name: "rwtest"},
@@ -390,14 +388,12 @@ func TestReconcileParity_ReadyWhen(t *testing.T) {
 	require.NoError(t, err, "readyWhen condition met → node must be ready")
 }
 
-// TestReconcileParity_ExternalRef proves that a named RGD externalRef
-// translates to a Graph Node.Ref and the resulting Graph compiles
-// (scoreboard rows 18, 24, 30, 31).
+// TestReconcileParity_ExternalRef verifies that a named RGD externalRef
+// translates to a Graph Node.Ref and the resulting Graph compiles.
 //
-// NOTE: the Simple executor returns ErrUnsupported for Ref nodes at APPLY
-// time (ref/watch are read-only cluster fetches, not yet wired in the Graph
-// executor). This test therefore asserts translation + compile ONLY and
-// explicitly documents the executor gap for F3+.
+// This test covers translation + compile only. The executor apply path for ref
+// nodes (a read-only GET/LIST that publishes the fetched object into scope) is
+// exercised by the integration suites.
 func TestReconcileParity_ExternalRef(t *testing.T) {
 	rgd := &v1alpha1.ResourceGraphDefinition{
 		ObjectMeta: metav1.ObjectMeta{Name: "reftest"},
@@ -464,10 +460,9 @@ func TestReconcileParity_ExternalRef(t *testing.T) {
 	_, err = compiler.NewCompilerWithDependencies(fakeResolver, rm).Compile(g)
 	require.NoError(t, err, "externalRef (named) translated graph must compile")
 
-	// EXECUTOR GAP (F3+): the Simple executor returns ErrUnsupported for
-	// NodeKindRef at apply time — ref/watch cluster-reads are not yet
-	// wired into the Graph executor. We do NOT call executor.Apply here;
-	// translation + compile is the proven boundary for F2.
+	// This test stops at translation + compile; it does not call executor.Apply.
+	// The executor's ref-node apply path (read-only cluster fetch published into
+	// scope) is covered by the integration suites.
 }
 
 func nestedString(t *testing.T, obj map[string]any, path ...string) string {

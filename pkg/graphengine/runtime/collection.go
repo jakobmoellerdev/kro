@@ -24,7 +24,7 @@ import (
 // DefaultMaxCollectionSize is the maximum number of instances a single
 // forEach expansion may produce. Without a cap, a Graph like
 // forEach: [{r: ${[1..100]}}, {t: ${[1..100]}}] would generate 10_000
-// objects per reconcile — a runaway. kro caps this; we copy the default.
+// objects per reconcile — a runaway. This cap keeps the expansion bounded.
 const DefaultMaxCollectionSize = 500
 
 // identityKey returns the GVK + namespace + name string used to dedup

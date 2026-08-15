@@ -53,7 +53,7 @@ type envOptions struct {
 	// customDeclarations will be added to the CEL environment.
 	customDeclarations []cel.EnvOption
 	// runtimeLibrary gates library.Runtime() and the ConditionTypeProvider
-	// wrap. Nil means default-on so RGD callers stay byte-identical.
+	// wrap. Nil means default-on.
 	runtimeLibrary *bool
 }
 
@@ -65,8 +65,7 @@ func (o *envOptions) runtimeEnabled() bool {
 
 // WithRuntimeLibrary gates the `runtime` CEL library and the
 // ConditionTypeProvider wrap that resolves kro.run.Condition. Default is
-// on so RGD callers stay byte-identical; Graph environments pass false
-// because they have no author-condition surface.
+// on; environments with no author-condition surface pass false to omit it.
 func WithRuntimeLibrary(enabled bool) EnvOption {
 	return func(opts *envOptions) {
 		opts.runtimeLibrary = &enabled
@@ -160,7 +159,7 @@ func coreDeclarations() []cel.EnvOption {
 // The result is cached via sync.Once since these options are stateless.
 //
 // The default includes library.Runtime(); pass WithRuntimeLibrary(false) to
-// omit it (Graph environments have no author-condition surface).
+// omit it when there is no author-condition surface.
 func BaseDeclarations(options ...EnvOption) []cel.EnvOption {
 	opts := &envOptions{}
 	for _, opt := range options {
@@ -284,7 +283,7 @@ func defaultEnvironment(options ...EnvOption) (*cel.Env, *DeclTypeProvider, erro
 	// its fields. This must run after the typed-resource provider above is
 	// installed, since cel.CustomTypeProvider replaces (not layers) the
 	// provider; ConditionTypeProvider delegates everything else back to it.
-	// Graph environments omit the wrap along with library.Runtime().
+	// Skipped when the runtime library is omitted.
 	if includeRuntime {
 		env, err = env.Extend(cel.CustomTypeProvider(library.ConditionTypeProvider(env.CELTypeProvider())))
 	}

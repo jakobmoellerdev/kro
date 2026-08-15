@@ -47,8 +47,7 @@ import (
 //
 // The two axes are orthogonal: a dynamic-GVK node can live at any frame, and a
 // frame can be entirely static. Nested compilation (subgraph nodes) pushes a
-// child context per frame; today only the root frame exists, so parent is
-// always nil — the chain is the spine the nesting work hangs on.
+// child context per frame; the parent chain is the spine name resolution walks.
 type CompilationContext struct {
 	// parent is the enclosing lexical frame, or nil at the root.
 	parent *CompilationContext

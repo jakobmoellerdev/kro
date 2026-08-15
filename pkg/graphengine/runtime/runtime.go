@@ -40,8 +40,8 @@ type Runtime struct {
 	nodes   []*Node
 	byID    map[string]*Node
 
-	// applyOrders maps node ID to its one-based reverse-topological layer,
-	// matching the classic runtime's ApplyOrders. Higher numbers are deleted
+	// applyOrders maps node ID to its one-based reverse-topological layer.
+	// Higher numbers are deleted
 	// first (dependents before dependencies). Persisted on each managed
 	// resource as metadata.ApplyOrderAnnotation for the deletion path.
 	applyOrders map[string]int
@@ -93,7 +93,7 @@ func New(prog *compiler.Program, g *expv1alpha1.Graph, opts ...Option) *Runtime 
 	for _, opt := range opts {
 		opt(rt)
 	}
-	// Phase 1: build the node wrappers in topological order so callers
+	// Build the node wrappers in topological order so callers
 	// see them in apply order.
 	rt.nodes = make([]*Node, 0, len(prog.TopologicalOrder))
 	for _, id := range prog.TopologicalOrder {
@@ -101,7 +101,7 @@ func New(prog *compiler.Program, g *expv1alpha1.Graph, opts ...Option) *Runtime 
 		rt.nodes = append(rt.nodes, n)
 		rt.byID[id] = n
 	}
-	// Phase 2: wire dependency pointers. Each Node carries pointers to
+	// Wire dependency pointers. Each Node carries pointers to
 	// the Node objects it depends on (not just IDs) so IsIgnored /
 	// CheckReadiness can recurse without a runtime lookup loop.
 	for _, n := range rt.nodes {
@@ -111,12 +111,12 @@ func New(prog *compiler.Program, g *expv1alpha1.Graph, opts ...Option) *Runtime 
 			}
 		}
 	}
-	// Phase 3: compute one-based reverse-topological apply orders. Nodes are
+	// Compute one-based reverse-topological apply orders. Nodes are
 	// already in topological order (dependencies precede dependents), so a
 	// single forward pass yields order(n) = 1 + max(order(deps)); leaves = 1.
 	// Def nodes (e.g. the synthetic `schema`/instance node) are excluded from
-	// the depth calculation and never stamped — matching the classic runtime,
-	// whose ApplyOrders cover only real resource nodes.
+	// the depth calculation and never stamped: apply orders cover only real
+	// resource nodes.
 	rt.applyOrders = make(map[string]int, len(rt.nodes))
 	for _, n := range rt.nodes {
 		if n.Kind() == compiler.NodeKindDef {

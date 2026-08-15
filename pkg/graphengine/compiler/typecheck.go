@@ -141,9 +141,9 @@ func (bc *buildContext) extendWithIterators(parent *cel.Env, iterators map[strin
 }
 
 // extendWithTypedVar returns a cached env that augments parent with a single
-// typed variable declaration derived from schema. Mirrors the classic
-// pkg/graph builder: used to bind the collection iterator variable (`each`)
-// to the node's element schema when type-checking collection readyWhen.
+// typed variable declaration derived from schema. Binds the collection
+// iterator variable (`each`) to the node's element schema when type-checking
+// collection readyWhen.
 func (bc *buildContext) extendWithTypedVar(parent *cel.Env, varName string, s *spec.Schema) (*cel.Env, error) {
 	if s == nil {
 		return parent, nil

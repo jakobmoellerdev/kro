@@ -106,8 +106,8 @@ type Controller struct {
 	// eventRecorder emits K8s Events on condition transitions.
 	eventRecorder record.EventRecorder
 
-	// graphEngineCompiler and graphEngineExecutor drive the (only) reconcile
-	// path. The executor is wired at construction; the compiler is injected via
+	// graphEngineCompiler and graphEngineExecutor drive instance reconciliation.
+	// The executor is wired at construction; the compiler is injected via
 	// WithGraphEngineCompiler after SetupWithManager.
 	graphEngineCompiler rgdadapter.Compiler
 	graphEngineExecutor *executor.Simple
@@ -121,8 +121,7 @@ type Controller struct {
 // graph revision for the RGD from a revisions.Resolver.
 //
 // The caller must supply a non-nil graphEngineClient (a controller-runtime
-// client.Client) used by the Graph engine executor, which is the sole
-// reconcile path.
+// client.Client) used by the Graph engine executor.
 func NewController(
 	log logr.Logger,
 	reconcileConfig ReconcileConfig,
@@ -137,8 +136,8 @@ func NewController(
 	graphEngineClient client.Client,
 ) *Controller {
 	exec := executor.NewSimple(graphEngineClient)
-	// RGD parity: gate dependents on upstream readyWhen (classic ordering).
-	// The generic Graph engine leaves this off.
+	// Gate dependents on their dependencies' readyWhen so a child is not created
+	// until the resources it depends on report ready.
 	exec.GateReadiness = true
 	if childResourceLabeler != nil {
 		lab := childResourceLabeler
@@ -253,8 +252,7 @@ func (c *Controller) Reconcile(ctx context.Context, req ctrl.Request) (err error
 	}
 
 	//--------------------------------------------------------------
-	// 2b. Honor the reconcile-suspended annotation before touching the
-	//     engine. This is engine-agnostic and mirrors the classic step 7:
+	// 2b. Honor the reconcile-suspended annotation before touching the engine:
 	//     mark ResourcesReady=False/ReconciliationSuspended and persist status
 	//     without reconciling any nodes.
 	//--------------------------------------------------------------
@@ -263,15 +261,14 @@ func (c *Controller) Reconcile(ctx context.Context, req ctrl.Request) (err error
 	}
 
 	//--------------------------------------------------------------
-	// 2c. Reconcile through the Graph engine (the only path)
+	// 2c. Reconcile through the Graph engine.
 	//--------------------------------------------------------------
 	return c.reconcileViaGraphEngine(ctx, inst, watcher)
 }
 
 // reconcileSuspended handles an instance carrying the reconcile-suspended
-// annotation. It mirrors the classic reconcile path's suspend branch: the
-// instance stays managed (finalizer + labels are stamped), the built-in
-// conditions report InstanceManaged=True, GraphResolved=True and
+// annotation. The instance stays managed (finalizer + labels are stamped), the
+// built-in conditions report InstanceManaged=True, GraphResolved=True and
 // ResourcesReady=False with reason "ReconciliationSuspended", and no nodes are
 // applied or pruned. Status is persisted so the Reconcile defer emits the
 // condition-transition events/metrics.
@@ -302,8 +299,7 @@ func (c *Controller) reconcileSuspended(ctx context.Context, inst *unstructured.
 	return c.persistNodeFreeStatus(ctx, instanceClient, inst, wireStatus, v1alpha1.InstanceStateActive)
 }
 
-// stampInstanceMetadata is a context-free variant of ensureManaged used by the
-// graph-engine path. It stamps the kro finalizer and instance-management labels
+// stampInstanceMetadata stamps the kro finalizer and instance-management labels
 // directly via the dynamic client and returns the server's patched object when
 // a write was needed (nil when the instance was already correct).
 func (c *Controller) stampInstanceMetadata(ctx context.Context, inst *unstructured.Unstructured) (*unstructured.Unstructured, error) {

@@ -72,7 +72,7 @@ type Node struct {
 	// Kind discriminates the node type.
 	Kind NodeKind
 
-	// GVR is the target GroupVersionResource. Set for Template/Patch/Ref
+	// GVR is the target GroupVersionResource. Set for Template/Ref
 	// with a literal apiVersion+kind; zero-valued for Def and for dynamic-GVK
 	// templates (the GVK isn't known until reconcile-time evaluation).
 	GVR schema.GroupVersionResource
@@ -90,7 +90,7 @@ type Node struct {
 	DynamicGVK bool
 
 	// Object is the parsed payload as an unstructured object:
-	//   Template/Patch: the user-authored manifest
+	//   Template: the user-authored manifest
 	//   Ref:            the ExternalRef projected as {apiVersion, kind, metadata}
 	//   Def:            the raw def map
 	Object *unstructured.Unstructured

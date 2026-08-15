@@ -14,8 +14,8 @@
 
 // Package rgdadapter translates a ResourceGraphDefinition into a Graph so
 // RGD composition can run on the Graph engine (compiler.Compile →
-// runtime.New → executor.Apply). F1 covers template resources and
-// named externalRef → ref; the instance spec is not a resource node and is
+// runtime.New → executor.Apply). Template resources and named externalRef →
+// ref are mapped to nodes; the instance spec is not a resource node and is
 // injected as a `schema` def node via InstanceSchemaNode.
 package rgdadapter
 
@@ -30,9 +30,9 @@ import (
 	"github.com/kubernetes-sigs/kro/api/v1alpha1"
 )
 
-// ErrUnsupported is returned when an RGD resource shape has no F1 mapping.
-// The error names the gap so later increments can pick it up instead of
-// silently dropping the resource.
+// ErrUnsupported is returned when an RGD resource shape has no Graph-node
+// mapping. The error names the gap rather than silently dropping the
+// resource.
 var ErrUnsupported = errors.New("rgdadapter: unsupported RGD shape")
 
 // ResourceGraphDefinitionToGraph maps each RGD resource onto a Graph node:
@@ -94,7 +94,7 @@ func resourceToNode(res *v1alpha1.Resource) (v1alpha1.Node, error) {
 			return v1alpha1.Node{}, fmt.Errorf("%w: resource %q: externalRef is missing metadata.name", ErrUnsupported, res.ID)
 		}
 		if len(res.ForEach) > 0 {
-			return v1alpha1.Node{}, fmt.Errorf("%w: resource %q: forEach on externalRef is not mapped in F1", ErrUnsupported, res.ID)
+			return v1alpha1.Node{}, fmt.Errorf("%w: resource %q: forEach on externalRef is not supported", ErrUnsupported, res.ID)
 		}
 		// The ExternalRef (including a *metav1.LabelSelector under
 		// metadata.selector, with matchLabels + matchExpressions) is carried
@@ -133,9 +133,9 @@ func InstanceSchemaNode(instance *unstructured.Unstructured) (v1alpha1.Node, err
 	}
 	val := map[string]any{}
 	// Expose the instance's full metadata (uid, labels, annotations,
-	// generation, creationTimestamp, …) as ${schema.metadata.*}, matching
-	// the classic RGD runtime. Falling back to name/namespace only would
-	// break RGDs that reference e.g. ${schema.metadata.uid}.
+	// generation, creationTimestamp, …) as ${schema.metadata.*}. Falling
+	// back to name/namespace only would break RGDs that reference e.g.
+	// ${schema.metadata.uid}.
 	if md, ok := instance.Object["metadata"].(map[string]any); ok {
 		val["metadata"] = md
 	} else {
