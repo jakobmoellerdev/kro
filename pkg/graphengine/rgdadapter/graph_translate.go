@@ -124,8 +124,17 @@ func InstanceSchemaNode(instance *unstructured.Unstructured) (v1alpha1.Node, err
 	}
 	val := map[string]any{
 		"metadata": map[string]any{
-			"name":      instance.GetName(),
-			"namespace": instance.GetNamespace(),
+			"name":              instance.GetName(),
+			"namespace":         instance.GetNamespace(),
+			"generateName":      instance.GetGenerateName(),
+			"labels":            interfaceMap(instance.GetLabels()),
+			"annotations":       interfaceMap(instance.GetAnnotations()),
+			"resourceVersion":   instance.GetResourceVersion(),
+			"uid":               string(instance.GetUID()),
+			"generation":        instance.GetGeneration(),
+			"creationTimestamp": instance.GetCreationTimestamp().Format("2006-01-02T15:04:05Z"),
+			"finalizers":        interfaceSlice(instance.GetFinalizers()),
+			"ownerReferences":   []any{},
 		},
 	}
 	if spec, ok := instance.Object["spec"]; ok {
@@ -159,6 +168,30 @@ func copyForEach(in []v1alpha1.ForEachDimension) []v1alpha1.ForEachDimension {
 			copied[k] = v
 		}
 		out[i] = copied
+	}
+	return out
+}
+
+// interfaceMap converts a string map to a map[string]any so CEL sees it as an
+// object (empty map when nil, so ${schema.metadata.labels} always resolves).
+func interfaceMap(m map[string]string) map[string]any {
+	if m == nil {
+		return map[string]any{}
+	}
+	out := make(map[string]any, len(m))
+	for k, v := range m {
+		out[k] = v
+	}
+	return out
+}
+
+func interfaceSlice(in []string) []any {
+	if in == nil {
+		return []any{}
+	}
+	out := make([]any, len(in))
+	for i, s := range in {
+		out[i] = s
 	}
 	return out
 }
