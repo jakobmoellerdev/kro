@@ -40,6 +40,14 @@ const (
 	// Graph). When disabled (the default), the Graph controller is not started
 	// and existing ResourceGraphDefinition behavior is unaffected.
 	GraphKind featuregate.Feature = "GraphKind"
+
+	// RGDOnGraph routes instance reconciliation through the Graph engine
+	// (pkg/graphengine) instead of the classic pkg/runtime path.  When
+	// disabled (the default) the existing RGD reconcile path is used
+	// byte-for-byte — this flag adds zero overhead in the default state.
+	// Alpha: wire-up is present but the compat suite must reach 36/36 before
+	// this graduates.  Enable with --feature-gates=RGDOnGraph=true.
+	RGDOnGraph featuregate.Feature = "RGDOnGraph"
 )
 
 // defaultKroFeatureGates consists of all known KRO-specific feature keys.
@@ -50,6 +58,7 @@ var defaultKroFeatureGates = map[featuregate.Feature]featuregate.FeatureSpec{
 	InstanceConditionMetrics: {Default: false, PreRelease: featuregate.Alpha},
 	CELOmitFunction:          {Default: false, PreRelease: featuregate.Alpha},
 	GraphKind:                {Default: false, PreRelease: featuregate.Alpha},
+	RGDOnGraph:               {Default: false, PreRelease: featuregate.Alpha},
 }
 
 // FeatureGate is the shared global MutableFeatureGate for KRO.

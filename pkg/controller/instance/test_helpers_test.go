@@ -240,6 +240,7 @@ func newControllerUnderTest(t *testing.T, raw *dynamicfake.FakeDynamicClient, g 
 		metadata.NewKROMetaLabeler(),
 		newControllerTestCoordinator(t),
 		record.NewFakeRecorder(100),
+		nil, // graphEngineClient: nil in tests (flag off)
 	)
 
 	return controller, clientSet
