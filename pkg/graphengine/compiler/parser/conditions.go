@@ -18,7 +18,7 @@ import (
 	"fmt"
 	"strings"
 
-	krocel "github.com/kubernetes-sigs/kro/pkg/graphengine/cel"
+	krocel "github.com/kubernetes-sigs/kro/pkg/cel"
 )
 
 // ParseConditionExpressions parses resource condition expressions (readyWhen, includeWhen).

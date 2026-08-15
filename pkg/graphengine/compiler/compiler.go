@@ -29,7 +29,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client/apiutil"
 
 	expv1alpha1 "github.com/kubernetes-sigs/kro/api/v1alpha1"
-	krocel "github.com/kubernetes-sigs/kro/pkg/graphengine/cel"
+	krocel "github.com/kubernetes-sigs/kro/pkg/cel"
 	"github.com/kubernetes-sigs/kro/pkg/cel/ast"
 	"github.com/kubernetes-sigs/kro/pkg/graph/dag"
 	"github.com/kubernetes-sigs/kro/pkg/graphengine/compiler/parser"
@@ -183,7 +183,7 @@ func (ctx *CompilationContext) compileFrame(apiNodes []expv1alpha1.Node, isRoot 
 	identifiers = append(identifiers, allIteratorNames(nodes)...)
 	dedupe(&identifiers)
 
-	inspectorEnv, err := krocel.DefaultEnvironment(krocel.WithResourceIDs(identifiers))
+	inspectorEnv, err := krocel.DefaultEnvironment(krocel.WithResourceIDs(identifiers), krocel.WithRuntimeLibrary(false))
 	if err != nil {
 		return nil, nil, fmt.Errorf("build inspector environment: %w", err)
 	}
@@ -222,7 +222,7 @@ func (ctx *CompilationContext) compileFrame(apiNodes []expv1alpha1.Node, isRoot 
 			dynIDs = append(dynIDs, id)
 		}
 	}
-	typedEnv, typeProvider, err := krocel.TypedEnvironmentWithIDsAndProvider(celSchemas, dynIDs)
+	typedEnv, typeProvider, err := krocel.TypedEnvironmentWithIDsAndProvider(celSchemas, dynIDs, krocel.WithRuntimeLibrary(false))
 	if err != nil {
 		return nil, nil, fmt.Errorf("build typed CEL environment: %w", err)
 	}

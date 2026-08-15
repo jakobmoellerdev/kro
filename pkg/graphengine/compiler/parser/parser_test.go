@@ -21,7 +21,7 @@ import (
 
 	"k8s.io/kube-openapi/pkg/validation/spec"
 
-	krocel "github.com/kubernetes-sigs/kro/pkg/graphengine/cel"
+	krocel "github.com/kubernetes-sigs/kro/pkg/cel"
 	schemacache "github.com/kubernetes-sigs/kro/pkg/graphengine/compiler/schema"
 	"github.com/kubernetes-sigs/kro/pkg/graphengine/compiler/variable"
 )
