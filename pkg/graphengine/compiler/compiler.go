@@ -104,16 +104,48 @@ func (c *Compiler) InvalidateSchema(gk k8sschema.GroupKind) {
 	c.resolverCache.InvalidateGroupKind(gk)
 }
 
+// CompileOption customizes a single CompileWithOptions call.
+type CompileOption func(*compileOptions)
+
+type compileOptions struct {
+	nodeSchemaOverrides map[string]*spec.Schema
+}
+
+// WithNodeSchemaOverride declares the OpenAPI schema a node publishes into
+// scope. For Def nodes this replaces the value-shape inference the compiler
+// otherwise applies (a fresh instance carrying no fields must still
+// type-check expressions that reference them). The schema is used verbatim;
+// the caller owns any conversion (e.g. RGD SimpleSchema → OpenAPI).
+func WithNodeSchemaOverride(nodeID string, s *spec.Schema) CompileOption {
+	return func(o *compileOptions) {
+		if o.nodeSchemaOverrides == nil {
+			o.nodeSchemaOverrides = make(map[string]*spec.Schema)
+		}
+		o.nodeSchemaOverrides[nodeID] = s
+	}
+}
+
 // Compile validates the Graph, parses every node's CEL expressions against
 // the target schemas, builds the dependency DAG, and returns the compiled
 // Program. Nested subgraphs are compiled recursively, each in its own lexical
 // frame. The input Graph is not mutated.
 func (c *Compiler) Compile(g *expv1alpha1.Graph) (*Program, error) {
+	return c.CompileWithOptions(g)
+}
+
+// CompileWithOptions is Compile with caller-supplied options.
+func (c *Compiler) CompileWithOptions(g *expv1alpha1.Graph, opts ...CompileOption) (*Program, error) {
 	if err := validateGraph(g); err != nil {
 		return nil, fmt.Errorf("invalid graph: %w", err)
 	}
 	graph := g.DeepCopy()
-	prog, _, err := c.rootContext().compileFrame(graph.Spec.Nodes, true)
+	var co compileOptions
+	for _, opt := range opts {
+		opt(&co)
+	}
+	ctx := c.rootContext()
+	ctx.nodeSchemaOverrides = co.nodeSchemaOverrides
+	prog, _, err := ctx.compileFrame(graph.Spec.Nodes, true)
 	if err != nil {
 		return nil, err
 	}

@@ -62,6 +62,14 @@ type CompilationContext struct {
 	// front (before node building) so a child frame compiled mid-build can
 	// still resolve forward references to this frame's later nodes.
 	localIDs map[string]struct{}
+
+	// nodeSchemaOverrides declares per-node publication schemas supplied by
+	// the caller via WithNodeSchemaOverride. A Def node with an override
+	// publishes that schema instead of the value-shape inference of
+	// inferDefSchema — used by the RGD adapter to type the `schema` node
+	// with the RGD's declared SimpleSchema, which stays stable across
+	// reconciles even when the instance is missing fields.
+	nodeSchemaOverrides map[string]*spec.Schema
 }
 
 // newRootContext builds the top-level compilation context for a single
@@ -83,11 +91,12 @@ func newRootContext(sr resolver.SchemaResolver, rm meta.RESTMapper) *Compilation
 // name resolution can walk outward.
 func (ctx *CompilationContext) child() *CompilationContext {
 	return &CompilationContext{
-		parent:         ctx,
-		schemaResolver: ctx.schemaResolver,
-		restMapper:     ctx.restMapper,
-		fieldCache:     ctx.fieldCache,
-		localIDs:       map[string]struct{}{},
+		parent:              ctx,
+		schemaResolver:      ctx.schemaResolver,
+		restMapper:          ctx.restMapper,
+		fieldCache:          ctx.fieldCache,
+		localIDs:            map[string]struct{}{},
+		nodeSchemaOverrides: ctx.nodeSchemaOverrides,
 	}
 }
 
@@ -153,7 +162,7 @@ func (ctx *CompilationContext) buildNode(p *parser.Parser, n *expv1alpha1.Node, 
 		if err != nil {
 			return nil, nil, err
 		}
-		return &Node{
+		node := &Node{
 			ID:          n.ID,
 			Index:       order,
 			Kind:        kind,
@@ -162,7 +171,11 @@ func (ctx *CompilationContext) buildNode(p *parser.Parser, n *expv1alpha1.Node, 
 			ForEach:     forEach,
 			IncludeWhen: includeWhen,
 			ReadyWhen:   readyWhen,
-		}, inferDefSchema(payload), nil
+		}
+		if override, ok := ctx.nodeSchemaOverrides[n.ID]; ok {
+			return node, override, nil
+		}
+		return node, inferDefSchema(payload), nil
 	}
 
 	// A Template whose apiVersion or kind is a CEL expression has no
