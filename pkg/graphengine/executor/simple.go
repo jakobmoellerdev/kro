@@ -18,6 +18,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strconv"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
@@ -31,6 +32,7 @@ import (
 	"github.com/kubernetes-sigs/kro/pkg/graphengine/compiler"
 	"github.com/kubernetes-sigs/kro/pkg/graphengine/runtime"
 	"github.com/kubernetes-sigs/kro/pkg/graphengine/watchrouter"
+	"github.com/kubernetes-sigs/kro/pkg/metadata"
 )
 
 // Simple is the v1 executor: walk nodes in topological order, SSA-apply
@@ -42,11 +44,17 @@ import (
 // publication. ReadyWhen checks gate the loop: an unsatisfied readyWhen
 // returns ErrNotReady so the reconciler requeues.
 type Simple struct {
-	Client        client.Client
+	Client client.Client
 	// LabelInjector, when non-nil, is called on every child object
 	// immediately before SSA apply so kro's per-instance labels are
 	// stamped by the graph-engine path. Safe to leave nil — no-op.
 	LabelInjector func(*unstructured.Unstructured)
+	// GateReadiness makes the executor withhold a node until every one of
+	// its dependencies has reached a terminal ready state this cycle
+	// (classic RGD ordering). When false (the default, used by the generic
+	// Graph engine), every reachable node is applied regardless of upstream
+	// readiness so drift watches register across a not-ready node.
+	GateReadiness bool
 }
 
 // NewSimple constructs a Simple executor bound to the given client.
@@ -84,7 +92,7 @@ func (s *Simple) ApplyWithLabeler(
 		extraLabeler(obj)
 	}
 	// Build a shadow executor with the composed injector so we don't mutate s.
-	shadow := &Simple{Client: s.Client, LabelInjector: composed}
+	shadow := &Simple{Client: s.Client, LabelInjector: composed, GateReadiness: s.GateReadiness}
 	return shadow.Apply(ctx, rt, w)
 }
 
@@ -111,6 +119,15 @@ var _ Interface = (*Simple)(nil)
 // would lose drift events on them. Soft errors are remembered and the
 // first one is returned at the end wrapped in ErrNotReady. Hard errors
 // (apply failure, type errors, etc.) still abort immediately.
+//
+// Dependency-readiness gating: a node is applied only once every node it
+// depends on is ready this cycle (readyWhen satisfied). A dependency that
+// was applied-but-not-ready, blocked, or unresolved leaves the dependent
+// blocked too — it is recorded Unresolved and skipped (never applied) so a
+// dependent resource is not created before its dependencies converge, and
+// its own dependents cascade-block via the readiness map. This mirrors
+// classic kro (RGD) ordering; it is a deliberate divergence from applying
+// every reachable node regardless of upstream readiness.
 func (s *Simple) Apply(ctx context.Context, rt *runtime.Runtime, w watchrouter.Watcher) (ApplyResult, error) {
 	var result ApplyResult
 	var firstSoft error
@@ -119,6 +136,10 @@ func (s *Simple) Apply(ctx context.Context, rt *runtime.Runtime, w watchrouter.W
 			firstSoft = err
 		}
 	}
+
+	// ready tracks which nodes reached a terminal ready state this cycle, so
+	// dependents can be gated until their dependencies converge.
+	ready := make(map[string]bool, len(rt.Nodes()))
 
 	for _, n := range rt.Nodes() {
 		ignored, err := n.IsIgnored()
@@ -137,8 +158,22 @@ func (s *Simple) Apply(ctx context.Context, rt *runtime.Runtime, w watchrouter.W
 		if ignored {
 			// Intentionally skipped — not Unresolved. The caller
 			// will treat any previous entries for this NodeID as
-			// prune candidates.
+			// prune candidates. Ignored nodes are non-blocking for
+			// dependents (their dependents are contagiously ignored too).
+			ready[n.ID()] = true
 			continue
+		}
+
+		// Gate on dependency readiness (classic RGD ordering): do not apply
+		// until every dependency is ready this cycle. Opt-in — the generic
+		// Graph engine leaves this off so dependents apply across a not-ready
+		// upstream (drift watches still register).
+		if s.GateReadiness {
+			if dep, blocked := firstUnreadyDep(n, ready); blocked {
+				result.Unresolved = append(result.Unresolved, n.ID())
+				recordSoft(fmt.Errorf("apply %q: waiting for dependency %q: %w", n.ID(), dep, ErrNotReady))
+				continue
+			}
 		}
 
 		// A subgraph node has no payload of its own — it runs a child
@@ -155,6 +190,7 @@ func (s *Simple) Apply(ctx context.Context, rt *runtime.Runtime, w watchrouter.W
 				}
 				return result, fmt.Errorf("apply %q (subgraph): %w", n.ID(), err)
 			}
+			ready[n.ID()] = true
 			continue
 		}
 
@@ -192,7 +228,26 @@ func (s *Simple) Apply(ctx context.Context, rt *runtime.Runtime, w watchrouter.W
 			}
 			n.SetObserved(desired, desired)
 			publishScope(rt, n, n.Observed())
-		case compiler.NodeKindRef, compiler.NodeKindWatch:
+		case compiler.NodeKindRef:
+			observed, err := s.applyRef(ctx, w, rt, n, desired)
+			if err != nil {
+				// A referenced object that isn't in the cluster yet is a
+				// soft condition: it may be applied separately or created
+				// later. Its identity is not ours to prune (read-only), so
+				// record it Unresolved and requeue instead of failing hard.
+				if errors.Is(err, ErrNotReady) || isSoftRuntimeErr(err) {
+					result.Unresolved = append(result.Unresolved, n.ID())
+					recordSoft(fmt.Errorf("apply %q (ref): %w", n.ID(), err))
+					continue
+				}
+				return result, fmt.Errorf("apply %q (ref): %w", n.ID(), err)
+			}
+			// Read-only: publish the live object so dependents resolve, but
+			// never append to result.Applied — kro must not own, prune, or
+			// delete a resource it only reads.
+			n.SetObserved(observed, desired)
+			publishScope(rt, n, n.Observed())
+		case compiler.NodeKindWatch:
 			return result, fmt.Errorf("apply %q (%s): %w", n.ID(), n.Kind(), ErrUnsupported)
 		default:
 			return result, fmt.Errorf("apply %q: unknown kind %v", n.ID(), n.Kind())
@@ -208,8 +263,21 @@ func (s *Simple) Apply(ctx context.Context, rt *runtime.Runtime, w watchrouter.W
 			}
 			return result, fmt.Errorf("apply %q: %w", n.ID(), err)
 		}
+		// Node reached a terminal ready state — unblock its dependents.
+		ready[n.ID()] = true
 	}
 	return result, firstSoft
+}
+
+// firstUnreadyDep returns the first direct dependency of n that has not
+// reached a ready state this cycle, and whether such a dependency exists.
+func firstUnreadyDep(n *runtime.Node, ready map[string]bool) (string, bool) {
+	for _, id := range n.DepIDs() {
+		if !ready[id] {
+			return id, true
+		}
+	}
+	return "", false
 }
 
 // managedResourceFrom builds a ManagedResource pointer from a node and
@@ -333,6 +401,7 @@ func (s *Simple) applyTemplate(ctx context.Context, rt *runtime.Runtime, w watch
 	applied := make([]expv1alpha1.ManagedResource, 0, len(desired))
 	for i, obj := range desired {
 		s.defaultNamespace(rt, mappings[i].namespaced, obj)
+		stampKROMeta(rt, n, obj)
 		if err := s.watchObject(w, n.ID(), mappings[i].gvr, obj); err != nil {
 			return applied, fmt.Errorf("register watch: %w", err)
 		}
@@ -345,6 +414,67 @@ func (s *Simple) applyTemplate(ctx context.Context, rt *runtime.Runtime, w watch
 		applied = append(applied, managedResourceFrom(n, obj))
 	}
 	return applied, nil
+}
+
+// stampKROMeta stamps the classic-runtime identity metadata the graph-engine
+// path would otherwise drop: the kro.run/node-id label (used by selectors and
+// managed-resource discovery) and the internal.kro.run/apply-order annotation
+// (the reverse-topological deletion wave read by the instance deletion path).
+// Per-instance labels are added separately by the executor's LabelInjector.
+func stampKROMeta(rt *runtime.Runtime, n *runtime.Node, obj *unstructured.Unstructured) {
+	labels := obj.GetLabels()
+	if labels == nil {
+		labels = map[string]string{}
+	}
+	labels[metadata.NodeIDLabel] = n.ID()
+	obj.SetLabels(labels)
+
+	if order, ok := rt.ApplyOrder(n.ID()); ok {
+		annotations := obj.GetAnnotations()
+		if annotations == nil {
+			annotations = map[string]string{}
+		}
+		annotations[metadata.ApplyOrderAnnotation] = strconv.Itoa(order)
+		obj.SetAnnotations(annotations)
+	}
+}
+
+// applyRef reads the external resource a ref node points at and returns its
+// live cluster state for publication into scope. A ref is READ-ONLY: kro
+// registers a watch so the Graph re-reconciles when the referenced object
+// changes, but never applies, owns, or prunes it. The caller therefore must
+// NOT record the returned object in ApplyResult.Applied.
+//
+// A referenced object that doesn't exist yet is a soft condition, not a
+// failure: it may be applied separately or created later, so we wrap
+// ErrNotReady and let the reconciler requeue. The watch is registered before
+// the read (and fires on create), so the Graph re-enqueues once it appears.
+func (s *Simple) applyRef(ctx context.Context, w watchrouter.Watcher, rt *runtime.Runtime, n *runtime.Node, desired []*unstructured.Unstructured) ([]*unstructured.Unstructured, error) {
+	// forEach is rejected on ref nodes at compile time, so Resolve produced
+	// exactly one projected {apiVersion, kind, metadata} object.
+	if len(desired) != 1 {
+		return nil, fmt.Errorf("ref node resolved to %d objects, want 1", len(desired))
+	}
+	ref := desired[0]
+	// Fill metadata.namespace from the Graph for namespaced kinds when the
+	// ExternalRef left it empty — matches the "defaults to the instance's
+	// namespace" contract on ExternalRefMetadata.
+	s.defaultNamespace(rt, n.Namespaced(), ref)
+
+	if err := s.watchObject(w, n.ID(), n.GVR(), ref); err != nil {
+		return nil, fmt.Errorf("register watch: %w", err)
+	}
+
+	live := &unstructured.Unstructured{}
+	live.SetGroupVersionKind(ref.GroupVersionKind())
+	key := client.ObjectKey{Namespace: ref.GetNamespace(), Name: ref.GetName()}
+	if err := s.Client.Get(ctx, key, live); err != nil {
+		if apierrors.IsNotFound(err) {
+			return nil, fmt.Errorf("external ref %s %q not found: %w", ref.GetKind(), key, ErrNotReady)
+		}
+		return nil, fmt.Errorf("get external ref %s %q: %w", ref.GetKind(), key, err)
+	}
+	return []*unstructured.Unstructured{live}, nil
 }
 
 // applySubgraph runs a nested Graph node's child Program. The child Runtime

@@ -54,6 +54,17 @@ type Node struct {
 // ID returns the node's identifier.
 func (n *Node) ID() string { return n.spec.ID }
 
+// DepIDs returns the IDs of the nodes this node directly depends on. Used by
+// the executor's dependency-readiness gate to decide whether a node may be
+// applied yet. Order is unspecified.
+func (n *Node) DepIDs() []string {
+	ids := make([]string, 0, len(n.deps))
+	for id := range n.deps {
+		ids = append(ids, id)
+	}
+	return ids
+}
+
 // Kind returns the node's compiled kind.
 func (n *Node) Kind() compiler.NodeKind { return n.spec.Kind }
 
