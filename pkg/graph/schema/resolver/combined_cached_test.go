@@ -53,7 +53,7 @@ func TestNewCachedSchemaResolver(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			c, err := NewCachedSchemaResolver(&mockResolver{}, tc.size)
+			c, err := NewCachedSchemaResolver(&pushMockResolver{}, tc.size)
 			if tc.wantErr {
 				require.Error(t, err)
 				assert.Nil(t, c)
@@ -102,11 +102,11 @@ func TestCachedSchemaResolver_ResolveSchema_DelegateError(t *testing.T) {
 	}
 }
 
-// TestNewCombinedResolver exercises the wiring helper. Building a discovery
+// TestNewCombinedResolverWithCache exercises the wiring helper. Building a discovery
 // client from a rest.Config is offline (no server contact), so a minimal
 // config yields a combined resolver plus the live cached resolver for
 // invalidation plumbing.
-func TestNewCombinedResolver(t *testing.T) {
+func TestNewCombinedResolverWithCache(t *testing.T) {
 	tests := []struct {
 		name    string
 		config  *rest.Config
@@ -121,7 +121,7 @@ func TestNewCombinedResolver(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			combined, cached, err := NewCombinedResolver(tc.config, nil)
+			combined, cached, err := NewCombinedResolverWithCache(tc.config, nil)
 			if tc.wantErr {
 				require.Error(t, err)
 				return

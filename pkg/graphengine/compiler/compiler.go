@@ -33,8 +33,8 @@ import (
 	"github.com/kubernetes-sigs/kro/pkg/cel/ast"
 	"github.com/kubernetes-sigs/kro/pkg/graph/dag"
 	"github.com/kubernetes-sigs/kro/pkg/graph/parser"
+	schemaresolver "github.com/kubernetes-sigs/kro/pkg/graph/schema/resolver"
 	"github.com/kubernetes-sigs/kro/pkg/graph/variable"
-	schemaresolver "github.com/kubernetes-sigs/kro/pkg/graphengine/compiler/schema/resolver"
 )
 
 // Compiler turns a v1alpha1.Graph into a compiled Program. It owns the
@@ -59,7 +59,7 @@ type Compiler struct {
 // NewCompiler constructs a Compiler from a rest.Config. The supplied
 // httpClient is used by the schema resolver and the discovery REST mapper.
 func NewCompiler(cfg *rest.Config, httpClient *http.Client) (*Compiler, error) {
-	sr, cached, err := schemaresolver.NewCombinedResolver(cfg, httpClient)
+	sr, cached, err := schemaresolver.NewCombinedResolverWithCache(cfg, httpClient)
 	if err != nil {
 		return nil, fmt.Errorf("create schema resolver: %w", err)
 	}
