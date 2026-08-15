@@ -42,12 +42,50 @@ import (
 // publication. ReadyWhen checks gate the loop: an unsatisfied readyWhen
 // returns ErrNotReady so the reconciler requeues.
 type Simple struct {
-	Client client.Client
+	Client        client.Client
+	// LabelInjector, when non-nil, is called on every child object
+	// immediately before SSA apply so kro's per-instance labels are
+	// stamped by the graph-engine path. Safe to leave nil — no-op.
+	LabelInjector func(*unstructured.Unstructured)
 }
 
 // NewSimple constructs a Simple executor bound to the given client.
 func NewSimple(c client.Client) *Simple {
 	return &Simple{Client: c}
+}
+
+// WithLabelInjector sets a labeling function that is called on each child
+// object before SSA apply. Calling this a second time replaces the previous
+// injector. Returns the receiver for chaining.
+func (s *Simple) WithLabelInjector(fn func(*unstructured.Unstructured)) *Simple {
+	s.LabelInjector = fn
+	return s
+}
+
+// ApplyWithLabeler is like Apply but stamps every child object with
+// the supplied labeler just before SSA, in addition to the struct-level
+// LabelInjector (if any). Uses a per-call override via the context so
+// concurrent reconciles for different instances of the same GVR are safe.
+func (s *Simple) ApplyWithLabeler(
+	ctx context.Context,
+	rt *runtime.Runtime,
+	w watchrouter.Watcher,
+	extraLabeler func(*unstructured.Unstructured),
+) (ApplyResult, error) {
+	if extraLabeler == nil {
+		return s.Apply(ctx, rt, w)
+	}
+	// Compose: first apply struct-level labels, then per-call extra labels.
+	prev := s.LabelInjector
+	composed := func(obj *unstructured.Unstructured) {
+		if prev != nil {
+			prev(obj)
+		}
+		extraLabeler(obj)
+	}
+	// Build a shadow executor with the composed injector so we don't mutate s.
+	shadow := &Simple{Client: s.Client, LabelInjector: composed}
+	return shadow.Apply(ctx, rt, w)
 }
 
 var _ Interface = (*Simple)(nil)
@@ -408,5 +446,8 @@ func (s *Simple) defaultNamespace(rt *runtime.Runtime, namespaced bool, obj *uns
 // ssaApply server-side applies obj with the graph-engine field manager. We
 // force ownership so re-applies after a hand-edit converge back.
 func (s *Simple) ssaApply(ctx context.Context, obj *unstructured.Unstructured) error {
+	if s.LabelInjector != nil {
+		s.LabelInjector(obj)
+	}
 	return s.Client.Patch(ctx, obj, client.Apply, client.FieldOwner(FieldManager), client.ForceOwnership)
 }

@@ -26,6 +26,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/tools/record"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -152,6 +153,12 @@ func NewController(
 	var exec *executor.Simple
 	if rgdOnGraph && graphEngineClient != nil {
 		exec = executor.NewSimple(graphEngineClient)
+		if childResourceLabeler != nil {
+			lab := childResourceLabeler
+			exec.WithLabelInjector(func(obj *unstructured.Unstructured) {
+				lab.ApplyLabels(obj)
+			})
+		}
 		// Compiler is set via WithGraphEngineCompiler after construction
 		// because it requires rest.Config which the caller owns.
 		// Leave comp nil for now — WithGraphEngineCompiler wires it.
@@ -382,6 +389,66 @@ func (c *Controller) ensureManaged(rcx *ReconcileContext) error {
 	}
 	rcx.Mark.InstanceManaged()
 	return nil
+}
+
+// stampInstanceMetadata is a context-free variant of ensureManaged used by the
+// graph-engine path. It stamps the kro finalizer and instance-management labels
+// directly via the dynamic client and returns the server's patched object when
+// a write was needed (nil when the instance was already correct).
+func (c *Controller) stampInstanceMetadata(ctx context.Context, inst *unstructured.Unstructured) (*unstructured.Unstructured, error) {
+	// Fast path: nothing to do if labels and finalizer are already present.
+	hasFinalizer := metadata.HasInstanceFinalizer(inst)
+	needFinalizer := !hasFinalizer
+	hasInventoryMetadata := hasAnyApplySetInventoryMetadata(inst)
+	if needFinalizer && hasInventoryMetadata {
+		if err := applyset.ValidateParentInventory(inst); err != nil {
+			return nil, fmt.Errorf(
+				"cannot install finalizer with invalid ApplySet inventory: %w", err)
+		}
+	}
+
+	wantLabels := c.instanceLabeler.Labels()
+	haveLabels := inst.GetLabels()
+	needLabelPatch := false
+	for k, v := range wantLabels {
+		if haveLabels[k] != v {
+			needLabelPatch = true
+			break
+		}
+	}
+
+	if !needFinalizer && !needLabelPatch {
+		return nil, nil
+	}
+
+	patch := instanceSSAPatch(inst)
+	patchLabels := maps.Clone(wantLabels)
+	if needFinalizer && !hasInventoryMetadata {
+		emptyInventory := applyset.Metadata{
+			ID:      applyset.ID(inst),
+			Tooling: applyset.ToolingID(),
+		}
+		maps.Copy(patchLabels, emptyInventory.Labels())
+		patch.SetAnnotations(emptyInventory.Annotations())
+	}
+	patch.SetLabels(patchLabels)
+	metadata.SetInstanceFinalizer(patch)
+
+	ri := c.client.Dynamic().Resource(c.gvr)
+	var instClient dynamic.ResourceInterface
+	if c.namespaced {
+		instClient = ri.Namespace(inst.GetNamespace())
+	} else {
+		instClient = ri
+	}
+	patched, err := instClient.Apply(ctx, inst.GetName(), patch, metav1.ApplyOptions{
+		FieldManager: FieldManagerForLabeler,
+		Force:        true,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("graph-engine: failed stamping instance metadata: %w", err)
+	}
+	return patched, nil
 }
 
 const (
