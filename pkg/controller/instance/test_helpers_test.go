@@ -217,7 +217,7 @@ func newControllerUnderTest(t *testing.T, raw *dynamicfake.FakeDynamicClient, g 
 	clientSet.SetRESTMapper(buildControllerTestRESTMapper())
 	registry := revisions.NewRegistry()
 	registry.Put(revisions.Entry{
-		RGDName:       controllerTestParentGVR.Resource,
+		OwnerKey:      controllerTestParentGVR.Resource,
 		Revision:      1,
 		State:         revisions.RevisionStateActive,
 		CompiledGraph: g,
@@ -257,7 +257,7 @@ func newControllerAndContext(
 	raw := newControllerTestDynamicClient(t, objs...)
 	controller, clientSet := newControllerUnderTest(t, raw, g)
 
-	rt, err := krt.FromGraph(g, instance.DeepCopy(), controller.reconcileConfig.RGDConfig)
+	rt, err := krt.FromGraph(g, controller.reconcileConfig.RGDConfig, krt.WithInstance(instance.DeepCopy()))
 	require.NoError(t, err)
 
 	namespaced := instance.GetNamespace() != ""
