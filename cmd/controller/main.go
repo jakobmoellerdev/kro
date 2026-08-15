@@ -295,10 +295,15 @@ func main() {
 		os.Exit(1)
 	}
 
-	// Graph controller (kro.run/v1alpha1) runs alongside the ResourceGraphDefinition stack in the same manager.
-	if err := setupGraphController(mgr, restConfig, set.HTTPClient(), set.Metadata(), rootLogger); err != nil {
-		setupLog.Error(err, "unable to set up Graph controller")
-		os.Exit(1)
+	// Graph controller (kro.run/v1alpha1) runs alongside the ResourceGraphDefinition
+	// stack in the same manager. Gated behind the GraphKind feature (default off) so
+	// it never starts in existing deployments unless explicitly enabled.
+	if features.FeatureGate.Enabled(features.GraphKind) {
+		setupLog.Info("GraphKind feature enabled; starting Graph controller")
+		if err := setupGraphController(mgr, restConfig, set.HTTPClient(), set.Metadata(), rootLogger); err != nil {
+			setupLog.Error(err, "unable to set up Graph controller")
+			os.Exit(1)
+		}
 	}
 
 	if err := mgr.Add(dc); err != nil {
