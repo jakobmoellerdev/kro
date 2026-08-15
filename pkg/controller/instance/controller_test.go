@@ -331,6 +331,7 @@ func TestReconcileGraphResolutionFailureMarksCondition(t *testing.T) {
 				metadata.NewKROMetaLabeler(),
 				newControllerTestCoordinator(t),
 				record.NewFakeRecorder(100),
+				nil, // graphEngineClient: nil in tests (flag off)
 			)
 
 			err := controller.Reconcile(context.Background(), ctrl.Request{
@@ -399,6 +400,7 @@ func TestReconcileGraphResolveFailureKeepsOnlyAuthorConditionsOnWire(t *testing.
 		metadata.NewKROMetaLabeler(),
 		newControllerTestCoordinator(t),
 		record.NewFakeRecorder(100),
+		nil, // graphEngineClient: nil in tests (flag off)
 	)
 
 	err := controller.Reconcile(context.Background(), ctrl.Request{

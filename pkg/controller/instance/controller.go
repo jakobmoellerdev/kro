@@ -28,6 +28,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/client-go/tools/record"
 	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	"github.com/kubernetes-sigs/kro/api/v1alpha1"
 	kroclient "github.com/kubernetes-sigs/kro/pkg/client"
@@ -36,6 +37,8 @@ import (
 	"github.com/kubernetes-sigs/kro/pkg/features"
 	"github.com/kubernetes-sigs/kro/pkg/graph"
 	"github.com/kubernetes-sigs/kro/pkg/graph/revisions"
+	"github.com/kubernetes-sigs/kro/pkg/graphengine/executor"
+	"github.com/kubernetes-sigs/kro/pkg/graphengine/rgdadapter"
 	"github.com/kubernetes-sigs/kro/pkg/metadata"
 	"github.com/kubernetes-sigs/kro/pkg/metrics"
 	"github.com/kubernetes-sigs/kro/pkg/requeue"
@@ -111,28 +114,52 @@ type Controller struct {
 	// eventRecorder emits K8s Events on condition transitions.
 	eventRecorder record.EventRecorder
 
+	// graphEngineCompiler and graphEngineExecutor are non-nil only when
+	// features.RGDOnGraph is enabled at construction time.  The flag-off
+	// path never touches them so the zero value is safe.
+	graphEngineCompiler rgdadapter.Compiler
+	graphEngineExecutor *executor.Simple
+
 	// feature gate flags, captured once at construction time.
-	eventsEnabled  bool
-	metricsEnabled bool
+	eventsEnabled    bool
+	metricsEnabled   bool
+	rgdOnGraphEnabled bool
 }
 
 // NewController constructs a new controller that resolves the newest issued
 // graph revision for the RGD from a GraphRevisionResolver.
+//
+// When features.RGDOnGraph is enabled the caller must supply a non-nil
+// graphEngineClient (a controller-runtime client.Client) used by the Graph
+// engine executor.  When the flag is off the parameter is unused and may be
+// nil — pass nil explicitly in that case for clarity.
 func NewController(
 	log logr.Logger,
 	reconcileConfig ReconcileConfig,
 	gvr schema.GroupVersionResource,
 	graphResolver GraphRevisionResolver,
 	namespaced bool,
-	client kroclient.SetInterface,
+	kroClient kroclient.SetInterface,
 	instanceLabeler metadata.Labeler,
 	childResourceLabeler metadata.Labeler,
 	coord *dynamiccontroller.WatchCoordinator,
 	eventRecorder record.EventRecorder,
+	graphEngineClient client.Client,
 ) *Controller {
+	rgdOnGraph := features.FeatureGate.Enabled(features.RGDOnGraph)
+
+	var comp rgdadapter.Compiler
+	var exec *executor.Simple
+	if rgdOnGraph && graphEngineClient != nil {
+		exec = executor.NewSimple(graphEngineClient)
+		// Compiler is set via WithGraphEngineCompiler after construction
+		// because it requires rest.Config which the caller owns.
+		// Leave comp nil for now — WithGraphEngineCompiler wires it.
+	}
+
 	return &Controller{
 		log:                  log,
-		client:               client,
+		client:               kroClient,
 		gvr:                  gvr,
 		graphResolver:        graphResolver,
 		namespaced:           namespaced,
@@ -141,9 +168,20 @@ func NewController(
 		reconcileConfig:      reconcileConfig,
 		coordinator:          coord,
 		eventRecorder:        eventRecorder,
+		graphEngineCompiler:  comp,
+		graphEngineExecutor:  exec,
 		eventsEnabled:        features.FeatureGate.Enabled(features.InstanceConditionEvents),
 		metricsEnabled:       features.FeatureGate.Enabled(features.InstanceConditionMetrics),
+		rgdOnGraphEnabled:    rgdOnGraph,
 	}
+}
+
+// WithGraphEngineCompiler sets the graph-engine compiler on an already-
+// constructed Controller.  This two-phase init exists because the compiler
+// needs a rest.Config that the instance controller does not own — the RGD
+// controller injects it after SetupWithManager.
+func (c *Controller) WithGraphEngineCompiler(comp rgdadapter.Compiler) {
+	c.graphEngineCompiler = comp
 }
 
 // Reconcile implements the controller-runtime Reconcile interface.
@@ -226,6 +264,13 @@ func (c *Controller) Reconcile(ctx context.Context, req ctrl.Request) (err error
 			return err
 		}
 		return c.updateDeletionStatus(dcx)
+	}
+
+	//--------------------------------------------------------------
+	// 2b. Route through Graph engine when RGDOnGraph is enabled
+	//--------------------------------------------------------------
+	if c.rgdOnGraphEnabled {
+		return c.reconcileViaGraphEngine(ctx, inst, watcher)
 	}
 
 	//--------------------------------------------------------------

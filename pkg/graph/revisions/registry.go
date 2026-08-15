@@ -18,6 +18,7 @@ import (
 	"strings"
 	"sync"
 
+	krov1alpha1 "github.com/kubernetes-sigs/kro/api/v1alpha1"
 	"github.com/kubernetes-sigs/kro/pkg/graph"
 	"github.com/kubernetes-sigs/kro/pkg/metrics"
 )
@@ -59,6 +60,13 @@ type Entry struct {
 	// CompiledGraph is populated for active revisions.
 	// Registry writes enforce that Active never exists without a graph.
 	CompiledGraph *graph.Graph
+
+	// RGDSpec is an optional copy of the source RGD spec at the time this
+	// revision was compiled.  Populated by the graphrevision controller so
+	// consumers (e.g. the RGDOnGraph instance path) can reconstruct a full
+	// *v1alpha1.ResourceGraphDefinition without a separate API fetch.
+	// Nil for entries written before F6a; callers must tolerate nil.
+	RGDSpec *krov1alpha1.ResourceGraphDefinitionSpec
 }
 
 // rgdBucket holds all revisions for a single RGD name.

@@ -41,6 +41,7 @@ import (
 	"github.com/kubernetes-sigs/kro/pkg/features"
 	"github.com/kubernetes-sigs/kro/pkg/graph"
 	"github.com/kubernetes-sigs/kro/pkg/graph/revisions"
+	"github.com/kubernetes-sigs/kro/pkg/graphengine/compiler"
 	"github.com/kubernetes-sigs/kro/pkg/metrics"
 	// +kubebuilder:scaffold:imports
 )
@@ -279,6 +280,21 @@ func main() {
 	if err := rgd.SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "ResourceGraphDefinition")
 		os.Exit(1)
+	}
+
+	// When RGDOnGraph is enabled, build a graph-engine compiler and inject it
+	// into the RGD reconciler so micro-controllers can route instance
+	// reconciliation through the Graph engine.  The compiler is built here
+	// (post-SetupWithManager) so it shares restConfig + httpClient with the
+	// rest of the manager process.
+	if features.FeatureGate.Enabled(features.RGDOnGraph) {
+		setupLog.Info("RGDOnGraph feature enabled; injecting graph-engine compiler into RGD reconciler")
+		geCmp, err := compiler.NewCompiler(restConfig, set.HTTPClient())
+		if err != nil {
+			setupLog.Error(err, "unable to build graph-engine compiler for RGDOnGraph")
+			os.Exit(1)
+		}
+		rgd.WithGraphEngineCompiler(geCmp)
 	}
 
 	gv := graphrevisionctrl.NewGraphRevisionReconciler(
