@@ -121,6 +121,321 @@ func TestReconcileParity_SchemaAndCrossNode(t *testing.T) {
 	assert.Equal(t, "cm1", nestedString(t, cm2Objs[0].Object, "data", "ref"))
 }
 
+// ── F2 parity tests ─────────────────────────────────────────────────────────
+
+// TestReconcileParity_ForEach proves that an RGD resource carrying a forEach
+// dimension translates to a Graph template node and the Graph runtime expands
+// it into one rendered object per list element (scoreboard rows 4, 5).
+func TestReconcileParity_ForEach(t *testing.T) {
+	rgd := &v1alpha1.ResourceGraphDefinition{
+		ObjectMeta: metav1.ObjectMeta{Name: "fortest"},
+		Spec: v1alpha1.ResourceGraphDefinitionSpec{
+			Resources: []*v1alpha1.Resource{
+				{
+					ID: "entry",
+					Template: rawResource(map[string]any{
+						"apiVersion": "v1",
+						"kind":       "ConfigMap",
+						// Name and data key use the iteration variable; unique
+						// per-element names satisfy the runtime duplicate check.
+						"metadata": map[string]any{"name": "${elem}", "namespace": "default"},
+						"data":     map[string]any{"label": "${elem}"},
+					}),
+					ForEach: []v1alpha1.ForEachDimension{
+						{"elem": "${schema.spec.items}"},
+					},
+				},
+			},
+		},
+	}
+
+	g, err := ResourceGraphDefinitionToGraph(rgd)
+	require.NoError(t, err)
+	require.Len(t, g.Spec.Nodes, 1)
+
+	// The translated node must carry the forEach dimension.
+	translated := g.Spec.Nodes[0]
+	require.Len(t, translated.ForEach, 1, "forEach dimension must survive translation")
+	// Sanity: the dimension key survives.
+	_, hasDim := translated.ForEach[0]["elem"]
+	require.True(t, hasDim, "forEach dimension key 'elem' must survive translation")
+
+	// Inject the instance with spec.items = ["a", "b"].
+	instance := &unstructured.Unstructured{Object: map[string]any{
+		"apiVersion": "example.com/v1alpha1",
+		"kind":       "ForTest",
+		"metadata":   map[string]any{"name": "demo", "namespace": "default"},
+		"spec":       map[string]any{"items": []any{"a", "b"}},
+	}}
+	schemaNode, err := InstanceSchemaNode(instance)
+	require.NoError(t, err)
+	g.Spec.Nodes = append([]v1alpha1.Node{schemaNode}, g.Spec.Nodes...)
+
+	// Compile.
+	fakeResolver, disco := testk8s.NewFakeResolver()
+	rm := restmapper.NewDeferredDiscoveryRESTMapper(memory.NewMemCacheClient(disco))
+	prog, err := compiler.NewCompilerWithDependencies(fakeResolver, rm).Compile(g)
+	require.NoError(t, err, "forEach graph must compile")
+
+	rt := graphruntime.New(prog, g)
+
+	// Publish the schema def first.
+	schemaObjs, err := rt.Node(SchemaNodeID).Resolve()
+	require.NoError(t, err)
+	rt.Set(SchemaNodeID, schemaObjs[0].Object)
+
+	// Resolve the forEach node — must expand to 2 objects.
+	entryObjs, err := rt.Node("entry").Resolve()
+	require.NoError(t, err)
+	require.Len(t, entryObjs, 2, "forEach with 2 elements must produce 2 objects")
+
+	assert.Equal(t, "a", nestedString(t, entryObjs[0].Object, "metadata", "name"))
+	assert.Equal(t, "a", nestedString(t, entryObjs[0].Object, "data", "label"))
+	assert.Equal(t, "b", nestedString(t, entryObjs[1].Object, "metadata", "name"))
+	assert.Equal(t, "b", nestedString(t, entryObjs[1].Object, "data", "label"))
+}
+
+// TestReconcileParity_IncludeWhen proves that an RGD resource with
+// includeWhen translates to a Graph node whose IsIgnored reflects the
+// condition value at runtime (scoreboard rows 7, 8, 9).
+func TestReconcileParity_IncludeWhen(t *testing.T) {
+	makeRGD := func() *v1alpha1.ResourceGraphDefinition {
+		return &v1alpha1.ResourceGraphDefinition{
+			ObjectMeta: metav1.ObjectMeta{Name: "iftest"},
+			Spec: v1alpha1.ResourceGraphDefinitionSpec{
+				Resources: []*v1alpha1.Resource{
+					{
+						ID: "always",
+						Template: rawResource(map[string]any{
+							"apiVersion": "v1",
+							"kind":       "ConfigMap",
+							"metadata":   map[string]any{"name": "always", "namespace": "default"},
+							"data":       map[string]any{"k": "v"},
+						}),
+					},
+					{
+						ID: "guarded",
+						Template: rawResource(map[string]any{
+							"apiVersion": "v1",
+							"kind":       "ConfigMap",
+							"metadata":   map[string]any{"name": "guarded", "namespace": "default"},
+							"data":       map[string]any{"k": "v"},
+						}),
+						IncludeWhen: []string{"${schema.spec.enabled}"},
+					},
+				},
+			},
+		}
+	}
+
+	compileWithEnabled := func(t *testing.T, enabled bool) (*graphruntime.Runtime, *v1alpha1.Graph) {
+		t.Helper()
+		g, err := ResourceGraphDefinitionToGraph(makeRGD())
+		require.NoError(t, err)
+
+		// Verify the includeWhen expression survives translation.
+		var guardedNode v1alpha1.Node
+		for _, n := range g.Spec.Nodes {
+			if n.ID == "guarded" {
+				guardedNode = n
+			}
+		}
+		require.Equal(t, []string{"${schema.spec.enabled}"}, guardedNode.IncludeWhen,
+			"includeWhen must survive translation")
+
+		instance := &unstructured.Unstructured{Object: map[string]any{
+			"apiVersion": "example.com/v1alpha1",
+			"kind":       "IfTest",
+			"metadata":   map[string]any{"name": "demo", "namespace": "default"},
+			"spec":       map[string]any{"enabled": enabled},
+		}}
+		schemaNode, err := InstanceSchemaNode(instance)
+		require.NoError(t, err)
+		g.Spec.Nodes = append([]v1alpha1.Node{schemaNode}, g.Spec.Nodes...)
+
+		fakeResolver, disco := testk8s.NewFakeResolver()
+		rm := restmapper.NewDeferredDiscoveryRESTMapper(memory.NewMemCacheClient(disco))
+		prog, err := compiler.NewCompilerWithDependencies(fakeResolver, rm).Compile(g)
+		require.NoError(t, err, "includeWhen graph must compile")
+
+		rt := graphruntime.New(prog, g)
+		// Publish schema so the includeWhen expression can be evaluated.
+		schemaObjs, err := rt.Node(SchemaNodeID).Resolve()
+		require.NoError(t, err)
+		rt.Set(SchemaNodeID, schemaObjs[0].Object)
+		return rt, g
+	}
+
+	t.Run("enabled=false → guarded node is ignored", func(t *testing.T) {
+		rt, _ := compileWithEnabled(t, false)
+		ignored, err := rt.Node("guarded").IsIgnored()
+		require.NoError(t, err)
+		assert.True(t, ignored, "guarded node must be ignored when spec.enabled=false")
+	})
+
+	t.Run("enabled=true → guarded node is NOT ignored", func(t *testing.T) {
+		rt, _ := compileWithEnabled(t, true)
+		ignored, err := rt.Node("guarded").IsIgnored()
+		require.NoError(t, err)
+		assert.False(t, ignored, "guarded node must not be ignored when spec.enabled=true")
+	})
+}
+
+// TestReconcileParity_ReadyWhen proves that an RGD resource with readyWhen
+// translates to a Graph node whose compiled readyWhen expressions are
+// present. We assert: (a) compile succeeds, (b) before SetObserved the node
+// returns ErrWaitingForReadiness, (c) after SetObserved with the condition
+// met the node reports ready (scoreboard rows 10, 11, 13).
+//
+// NOTE: full readiness-gate behaviour (observed cluster state driving
+// re-queue) requires the executor; this test proves the translation +
+// compile + runtime gate only. The executor gap is tracked in F3+.
+func TestReconcileParity_ReadyWhen(t *testing.T) {
+	rgd := &v1alpha1.ResourceGraphDefinition{
+		ObjectMeta: metav1.ObjectMeta{Name: "rwtest"},
+		Spec: v1alpha1.ResourceGraphDefinitionSpec{
+			Resources: []*v1alpha1.Resource{
+				{
+					ID: "cm",
+					Template: rawResource(map[string]any{
+						"apiVersion": "v1",
+						"kind":       "ConfigMap",
+						"metadata":   map[string]any{"name": "cm", "namespace": "default"},
+						"data":       map[string]any{"ready": "yes"},
+					}),
+					ReadyWhen: []string{"${cm.data.ready == 'yes'}"},
+				},
+			},
+		},
+	}
+
+	g, err := ResourceGraphDefinitionToGraph(rgd)
+	require.NoError(t, err)
+
+	// Verify readyWhen survives translation.
+	require.Equal(t, []string{"${cm.data.ready == 'yes'}"}, g.Spec.Nodes[0].ReadyWhen,
+		"readyWhen must survive translation")
+
+	// Inject a minimal schema (no spec fields needed for this test).
+	instance := &unstructured.Unstructured{Object: map[string]any{
+		"apiVersion": "example.com/v1alpha1",
+		"kind":       "RWTest",
+		"metadata":   map[string]any{"name": "demo", "namespace": "default"},
+		"spec":       map[string]any{},
+	}}
+	schemaNode, err := InstanceSchemaNode(instance)
+	require.NoError(t, err)
+	g.Spec.Nodes = append([]v1alpha1.Node{schemaNode}, g.Spec.Nodes...)
+
+	// Compile — the readyWhen expression must type-check.
+	fakeResolver, disco := testk8s.NewFakeResolver()
+	rm := restmapper.NewDeferredDiscoveryRESTMapper(memory.NewMemCacheClient(disco))
+	prog, err := compiler.NewCompilerWithDependencies(fakeResolver, rm).Compile(g)
+	require.NoError(t, err, "readyWhen graph must compile")
+
+	rt := graphruntime.New(prog, g)
+	// Publish schema def.
+	schemaObjs, err := rt.Node(SchemaNodeID).Resolve()
+	require.NoError(t, err)
+	rt.Set(SchemaNodeID, schemaObjs[0].Object)
+
+	// (b) Before SetObserved: readyWhen must gate with ErrWaitingForReadiness.
+	err = rt.Node("cm").CheckReadiness()
+	require.Error(t, err)
+	require.ErrorIs(t, err, graphruntime.ErrWaitingForReadiness,
+		"no observed state → must be ErrWaitingForReadiness")
+
+	// (c) After Resolve + SetObserved with the ready condition met: ready.
+	objs, err := rt.Node("cm").Resolve()
+	require.NoError(t, err)
+	require.Len(t, objs, 1)
+	rt.Set("cm", objs[0].Object)
+	rt.Node("cm").SetObserved(objs, objs)
+
+	err = rt.Node("cm").CheckReadiness()
+	require.NoError(t, err, "readyWhen condition met → node must be ready")
+}
+
+// TestReconcileParity_ExternalRef proves that a named RGD externalRef
+// translates to a Graph Node.Ref and the resulting Graph compiles
+// (scoreboard rows 18, 24, 30, 31).
+//
+// NOTE: the Simple executor returns ErrUnsupported for Ref nodes at APPLY
+// time (ref/watch are read-only cluster fetches, not yet wired in the Graph
+// executor). This test therefore asserts translation + compile ONLY and
+// explicitly documents the executor gap for F3+.
+func TestReconcileParity_ExternalRef(t *testing.T) {
+	rgd := &v1alpha1.ResourceGraphDefinition{
+		ObjectMeta: metav1.ObjectMeta{Name: "reftest"},
+		Spec: v1alpha1.ResourceGraphDefinitionSpec{
+			Resources: []*v1alpha1.Resource{
+				// A ref node: import an existing ConfigMap into scope.
+				{
+					ID: "cfg",
+					ExternalRef: &v1alpha1.ExternalRef{
+						APIVersion: "v1",
+						Kind:       "ConfigMap",
+						Metadata: v1alpha1.ExternalRefMetadata{
+							Name:      "cluster-config",
+							Namespace: "kube-system",
+						},
+					},
+				},
+				// A template node that uses the ref's fields.
+				{
+					ID: "consumer",
+					Template: rawResource(map[string]any{
+						"apiVersion": "v1",
+						"kind":       "ConfigMap",
+						"metadata":   map[string]any{"name": "consumer", "namespace": "default"},
+						"data":       map[string]any{"from": "${cfg.metadata.name}"},
+					}),
+				},
+			},
+		},
+	}
+
+	g, err := ResourceGraphDefinitionToGraph(rgd)
+	require.NoError(t, err)
+	require.Len(t, g.Spec.Nodes, 2)
+
+	// Translation: the externalRef resource must become a Node.Ref.
+	var refNode v1alpha1.Node
+	for _, n := range g.Spec.Nodes {
+		if n.ID == "cfg" {
+			refNode = n
+		}
+	}
+	require.NotNil(t, refNode.Ref, "externalRef must translate to Node.Ref")
+	assert.Equal(t, "v1", refNode.Ref.APIVersion)
+	assert.Equal(t, "ConfigMap", refNode.Ref.Kind)
+	assert.Equal(t, "cluster-config", refNode.Ref.Metadata.Name)
+	assert.Equal(t, "kube-system", refNode.Ref.Metadata.Namespace)
+	assert.Nil(t, refNode.Template, "Ref node must not have Template set")
+
+	// Inject a schema def (no instance fields needed for this test).
+	instance := &unstructured.Unstructured{Object: map[string]any{
+		"apiVersion": "example.com/v1alpha1",
+		"kind":       "RefTest",
+		"metadata":   map[string]any{"name": "demo", "namespace": "default"},
+		"spec":       map[string]any{},
+	}}
+	schemaNode, err := InstanceSchemaNode(instance)
+	require.NoError(t, err)
+	g.Spec.Nodes = append([]v1alpha1.Node{schemaNode}, g.Spec.Nodes...)
+
+	// Compile — the Ref node + downstream template must compile cleanly.
+	fakeResolver, disco := testk8s.NewFakeResolver()
+	rm := restmapper.NewDeferredDiscoveryRESTMapper(memory.NewMemCacheClient(disco))
+	_, err = compiler.NewCompilerWithDependencies(fakeResolver, rm).Compile(g)
+	require.NoError(t, err, "externalRef (named) translated graph must compile")
+
+	// EXECUTOR GAP (F3+): the Simple executor returns ErrUnsupported for
+	// NodeKindRef at apply time — ref/watch cluster-reads are not yet
+	// wired into the Graph executor. We do NOT call executor.Apply here;
+	// translation + compile is the proven boundary for F2.
+}
+
 func nestedString(t *testing.T, obj map[string]any, path ...string) string {
 	t.Helper()
 	v, found, err := unstructured.NestedString(obj, path...)
