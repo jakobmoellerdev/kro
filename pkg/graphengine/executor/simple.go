@@ -24,6 +24,7 @@ import (
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -399,11 +400,27 @@ func (s *Simple) applyTemplate(ctx context.Context, rt *runtime.Runtime, w watch
 	}
 
 	applied := make([]expv1alpha1.ManagedResource, 0, len(desired))
+	size := len(desired)
+	collectionWatched := false
 	for i, obj := range desired {
 		s.defaultNamespace(rt, mappings[i].namespaced, obj)
-		stampKROMeta(rt, n, obj)
-		if err := s.watchObject(w, n.ID(), mappings[i].gvr, obj); err != nil {
-			return applied, fmt.Errorf("register watch: %w", err)
+		stampKROMeta(rt, n, obj, i, size)
+		// Collection nodes register ONE selector-based watch for the whole
+		// node (keyed by NodeID, matching every item by label) instead of N
+		// scalar watches — the coordinator keys state by NodeID, so per-item
+		// scalar watches would collapse to only the last item. Scalar nodes
+		// keep their per-object watch. Watches register before SSA apply.
+		if n.IsCollection() {
+			if !collectionWatched {
+				if err := s.watchCollection(w, n, mappings[i].gvr, obj); err != nil {
+					return applied, fmt.Errorf("register collection watch: %w", err)
+				}
+				collectionWatched = true
+			}
+		} else {
+			if err := s.watchObject(w, n.ID(), mappings[i].gvr, obj); err != nil {
+				return applied, fmt.Errorf("register watch: %w", err)
+			}
 		}
 		if err := s.ssaApply(ctx, obj); err != nil {
 			return applied, err
@@ -420,13 +437,20 @@ func (s *Simple) applyTemplate(ctx context.Context, rt *runtime.Runtime, w watch
 // path would otherwise drop: the kro.run/node-id label (used by selectors and
 // managed-resource discovery) and the internal.kro.run/apply-order annotation
 // (the reverse-topological deletion wave read by the instance deletion path).
-// Per-instance labels are added separately by the executor's LabelInjector.
-func stampKROMeta(rt *runtime.Runtime, n *runtime.Node, obj *unstructured.Unstructured) {
+// For collection items it also stamps the collection-index / collection-size
+// labels (index within the expansion, total item count) matching classic
+// NewCollectionItemLabeler. Per-instance labels are added separately by the
+// executor's LabelInjector.
+func stampKROMeta(rt *runtime.Runtime, n *runtime.Node, obj *unstructured.Unstructured, index, size int) {
 	labels := obj.GetLabels()
 	if labels == nil {
 		labels = map[string]string{}
 	}
 	labels[metadata.NodeIDLabel] = n.ID()
+	if n.IsCollection() {
+		labels[metadata.CollectionIndexLabel] = strconv.Itoa(index)
+		labels[metadata.CollectionSizeLabel] = strconv.Itoa(size)
+	}
 	obj.SetLabels(labels)
 
 	if order, ok := rt.ApplyOrder(n.ID()); ok {
@@ -558,6 +582,34 @@ func (s *Simple) watchObject(w watchrouter.Watcher, nodeID string, gvr schema.Gr
 		GVR:       gvr,
 		Name:      obj.GetName(),
 		Namespace: obj.GetNamespace(),
+	})
+}
+
+// watchCollection registers a single selector-based watch for a collection
+// node. The coordinator keys watch state by NodeID, so N per-item scalar
+// watches would collapse to only the last item and drift on the others would
+// go unobserved. One selector watch matching {instance-id, node-id} tracks
+// every item under this node. The instance-id label is stamped by the
+// LabelInjector (invoked here so it is present before the selector is built,
+// idempotent with the apply-time call); if it is absent the selector falls
+// back to node-id only. Namespace comes from the (already namespace-defaulted)
+// sample item and is empty for cluster-scoped resources.
+func (s *Simple) watchCollection(w watchrouter.Watcher, n *runtime.Node, gvr schema.GroupVersionResource, sample *unstructured.Unstructured) error {
+	if w == nil {
+		return nil
+	}
+	if s.LabelInjector != nil {
+		s.LabelInjector(sample)
+	}
+	set := labels.Set{metadata.NodeIDLabel: n.ID()}
+	if uid := sample.GetLabels()[metadata.InstanceIDLabel]; uid != "" {
+		set[metadata.InstanceIDLabel] = uid
+	}
+	return w.Watch(watchrouter.WatchRequest{
+		NodeID:    n.ID(),
+		GVR:       gvr,
+		Namespace: sample.GetNamespace(),
+		Selector:  labels.SelectorFromSet(set),
 	})
 }
 
