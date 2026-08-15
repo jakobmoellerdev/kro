@@ -30,7 +30,6 @@ import (
 	"github.com/kubernetes-sigs/kro/pkg/apis"
 	"github.com/kubernetes-sigs/kro/pkg/cel/library"
 	"github.com/kubernetes-sigs/kro/pkg/metrics"
-	"github.com/kubernetes-sigs/kro/pkg/requeue"
 )
 
 const (
@@ -182,59 +181,6 @@ func (c *Controller) updateConditionsStatus(ctx context.Context, inst *unstructu
 	})
 }
 
-func (c *Controller) updateStatus(rcx *ReconcileContext) error {
-	previousState, _ := rcx.WireStatus["state"].(string)
-
-	rcx.updateInstanceState()
-	status := rcx.initialStatus()
-
-	desired, err := rcx.Runtime.Instance().GetDesired()
-	if err != nil {
-		return err
-	}
-	if resolved, found, _ := unstructured.NestedMap(desired[0].Object, "status"); found {
-		for k, v := range resolved {
-			if k == "conditions" || k == "state" {
-				continue
-			}
-			status[k] = v
-		}
-	}
-
-	// When the RGD declares author conditions, only those appear on the
-	// wire. kro's built-ins stay readable from author CEL through
-	// runtime.condition(schema, 'X').
-	instanceNode := rcx.Runtime.Instance()
-	if instanceNode.HasConditions() {
-		authored, incomplete, evalErr := instanceNode.EvaluateConditions(
-			rcx.Log, builtinConditions(rcx.Instance),
-		)
-
-		// Read previous conditions from the wire snapshot, not rcx.Instance:
-		// the markers have already overwritten any built-in-typed override.
-		conds, _ := rcx.WireStatus["conditions"].([]interface{})
-		previous := decodeConditions(conds)
-		stamped := stampAuthorConditions(authored, previous, rcx.Instance.GetGeneration())
-		if incomplete {
-			// Keep the previously persisted conditions for the types that
-			// produced no output this reconcile.
-			stamped = mergeWithPrevious(stamped, previous)
-		}
-		status["conditions"] = conditionsToInterfaceSlice(stamped)
-
-		// A degraded result still surfaces its surviving conditions; set
-		// state=Error rather than failing the reconcile.
-		if evalErr != nil {
-			rcx.Log.Error(evalErr, "author conditions degraded; setting state=Error")
-			status["state"] = string(v1alpha1.InstanceStateError)
-		}
-	}
-
-	return c.persistStatus(
-		rcx.Ctx, rcx.InstanceClient(), rcx.Instance, rcx.WireStatus, status, previousState,
-	)
-}
-
 // updateDeletionStatus updates instance-level deletion status without a
 // runtime. Status projections and author conditions that cannot be evaluated
 // during early deletion are preserved from the wire.
@@ -371,10 +317,6 @@ func mergeWithPrevious(current, previous []v1alpha1.Condition) []v1alpha1.Condit
 	return current
 }
 
-func (rcx *ReconcileContext) initialStatus() map[string]interface{} {
-	return initialStatus(rcx.Instance, rcx.StateManager)
-}
-
 func initialStatus(instance *unstructured.Unstructured, stateManager *StateManager) map[string]interface{} {
 	cs := condSet.For(&unstructuredWrapper{instance})
 
@@ -393,15 +335,6 @@ func initialStatus(instance *unstructured.Unstructured, stateManager *StateManag
 		status["state"] = string(stateManager.State)
 	}
 	return status
-}
-
-func (rcx *ReconcileContext) updateInstanceState() {
-	switch rcx.StateManager.ReconcileErr.(type) {
-	case *requeue.NoRequeue, *requeue.RequeueNeeded, *requeue.RequeueNeededAfter:
-		return
-	default:
-		rcx.StateManager.Update()
-	}
 }
 
 // stampAuthorConditions converts evaluated library.Condition values into

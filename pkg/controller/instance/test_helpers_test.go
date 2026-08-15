@@ -49,7 +49,6 @@ import (
 	"github.com/kubernetes-sigs/kro/pkg/graph/revisions"
 	"github.com/kubernetes-sigs/kro/pkg/graph/variable"
 	"github.com/kubernetes-sigs/kro/pkg/metadata"
-	krt "github.com/kubernetes-sigs/kro/pkg/runtime"
 )
 
 var (
@@ -244,39 +243,6 @@ func newControllerUnderTest(t *testing.T, raw *dynamicfake.FakeDynamicClient, g 
 	)
 
 	return controller, clientSet
-}
-
-func newControllerAndContext(
-	t *testing.T,
-	instance *unstructured.Unstructured,
-	g *graph.Graph,
-	extraObjs ...apimachineryruntime.Object,
-) (*Controller, *ReconcileContext, *dynamicfake.FakeDynamicClient) {
-	t.Helper()
-
-	objs := append([]apimachineryruntime.Object{instance.DeepCopy()}, extraObjs...)
-	raw := newControllerTestDynamicClient(t, objs...)
-	controller, clientSet := newControllerUnderTest(t, raw, g)
-
-	rt, err := krt.FromGraph(g, controller.reconcileConfig.RGDConfig, krt.WithInstance(instance.DeepCopy()))
-	require.NoError(t, err)
-
-	namespaced := instance.GetNamespace() != ""
-	rcx := NewReconcileContext(
-		context.Background(),
-		controller.log,
-		controllerTestParentGVR,
-		namespaced,
-		clientSet.Dynamic(),
-		clientSet.RESTMapper(),
-		controller.childResourceLabeler,
-		rt,
-		controller.reconcileConfig,
-		instance.DeepCopy(),
-	)
-	rcx.Watcher = dynamiccontroller.NoopInstanceWatcher{}
-
-	return controller, rcx, raw
 }
 
 func newControllerAndDeletionContext(

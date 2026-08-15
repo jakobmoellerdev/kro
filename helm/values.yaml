@@ -186,7 +186,6 @@ config:
   #     CELOmitFunction: true
   featureGates:
     CELOmitFunction: true
-    RGDOnGraph: true
 
 metrics:
   service:
