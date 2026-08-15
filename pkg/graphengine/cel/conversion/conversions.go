@@ -27,7 +27,7 @@ import (
 	v1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 
-	"github.com/kubernetes-sigs/kro/pkg/graphengine/cel/sentinels"
+	"github.com/kubernetes-sigs/kro/pkg/cel/sentinels"
 )
 
 // ErrUnsupportedType is returned when the type is not supported.
