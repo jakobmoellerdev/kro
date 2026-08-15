@@ -28,7 +28,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
 	expv1alpha1 "github.com/kubernetes-sigs/kro/api/v1alpha1"
-	"github.com/kubernetes-sigs/kro/pkg/graphengine/apis"
+	"github.com/kubernetes-sigs/kro/pkg/apis"
 	"github.com/kubernetes-sigs/kro/pkg/graphengine/compiler"
 	"github.com/kubernetes-sigs/kro/pkg/graphengine/executor"
 	"github.com/kubernetes-sigs/kro/pkg/graphengine/metadata"
