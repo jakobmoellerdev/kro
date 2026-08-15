@@ -278,8 +278,6 @@ func (s *Simple) Apply(ctx context.Context, rt *runtime.Runtime, w watchrouter.W
 				n.SetObserved(observed, desired)
 			}
 			publishScope(rt, n, n.Observed())
-		case compiler.NodeKindWatch:
-			return result, fmt.Errorf("apply %q (%s): %w", n.ID(), n.Kind(), ErrUnsupported)
 		default:
 			return result, fmt.Errorf("apply %q: unknown kind %v", n.ID(), n.Kind())
 		}

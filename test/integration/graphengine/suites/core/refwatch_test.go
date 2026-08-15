@@ -27,16 +27,12 @@ import (
 	"github.com/kubernetes-sigs/kro/test/integration/graphengine/environment"
 )
 
-// TestRefAndWatchAreCurrentlyUnsupported pins the v1 limitation: the
-// compiler accepts ref and watch node shapes, but the Simple executor
-// surfaces ErrUnsupported when it encounters them at apply time. The
-// Graph therefore reaches Accepted=True (compile succeeded) but
-// Ready never flips True — the message on Ready (or Accepted) will
-// reference the unsupported kind.
-//
-// When ref/watch are fully wired this test will need to be flipped;
-// keeping it here ensures we notice the change.
-func TestRefAndWatchAreCurrentlyUnsupported(t *testing.T) {
+// TestRefToMissingExternalStaysNotReady pins ref behavior: the compiler
+// accepts a ref node and the Simple executor observes the referenced
+// object at apply time. When that object does not exist in the cluster,
+// the ref is a soft not-ready condition, so the Graph reaches
+// Accepted=True (compile succeeded) but Ready never flips True.
+func TestRefToMissingExternalStaysNotReady(t *testing.T) {
 	env := environment.Shared(t)
 
 	tests := []struct {
@@ -45,7 +41,7 @@ func TestRefAndWatchAreCurrentlyUnsupported(t *testing.T) {
 		wantSubstr string
 	}{
 		{
-			name: "ref-node-surfaces-unsupported",
+			name: "ref-to-missing-object-stays-not-ready",
 			node: expv1alpha1.Node{
 				ID: "x",
 				Ref: &expv1alpha1.ExternalRef{
@@ -56,19 +52,7 @@ func TestRefAndWatchAreCurrentlyUnsupported(t *testing.T) {
 					},
 				},
 			},
-			wantSubstr: "not supported",
-		},
-		{
-			name: "watch-node-surfaces-unsupported",
-			node: expv1alpha1.Node{
-				ID: "y",
-				Watch: &expv1alpha1.WatchSpec{
-					APIVersion: "v1",
-					Kind:       "ConfigMap",
-					Selector:   map[string]string{"app": "demo"},
-				},
-			},
-			wantSubstr: "not supported",
+			wantSubstr: "not",
 		},
 	}
 

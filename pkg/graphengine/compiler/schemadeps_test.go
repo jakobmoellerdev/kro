@@ -157,13 +157,6 @@ func TestEmitSchemaDependenciesUnit(t *testing.T) {
 			wantGKs: nil,
 		},
 		{
-			name: "watch-kind-contributes-GK",
-			nodes: map[string]*Node{
-				"w": {ID: "w", Kind: NodeKindWatch, Object: mk("v1", "Pod")},
-			},
-			wantGKs: []schema.GroupKind{{Group: "", Kind: "Pod"}},
-		},
-		{
 			name: "ref-kind-contributes-GK",
 			nodes: map[string]*Node{
 				"r": {ID: "r", Kind: NodeKindRef, Object: mk("v1", "Secret")},

@@ -116,8 +116,6 @@ func validateKindCompatibility(n *expv1alpha1.Node) error {
 	switch {
 	case n.Ref != nil:
 		return fmt.Errorf("forEach is not supported on ref nodes")
-	case n.Watch != nil:
-		return fmt.Errorf("forEach is not supported on watch nodes (watch is inherently a collection)")
 	}
 	return nil
 }
@@ -138,16 +136,13 @@ func validateNodeID(id string) error {
 }
 
 // validateNodeShape enforces the discriminated-union contract: exactly one
-// of template/patch/ref/watch/def must be set.
+// of template/patch/ref/def must be set.
 func validateNodeShape(n *expv1alpha1.Node) error {
 	set := 0
 	if n.Template != nil {
 		set++
 	}
 	if n.Ref != nil {
-		set++
-	}
-	if n.Watch != nil {
 		set++
 	}
 	if n.Def != nil {
@@ -157,7 +152,7 @@ func validateNodeShape(n *expv1alpha1.Node) error {
 		set++
 	}
 	if set != 1 {
-		return fmt.Errorf("exactly one of template/ref/watch/def/graph must be set (got %d)", set)
+		return fmt.Errorf("exactly one of template/ref/def/graph must be set (got %d)", set)
 	}
 	return nil
 }

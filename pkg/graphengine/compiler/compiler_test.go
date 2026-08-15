@@ -132,24 +132,6 @@ func TestCompile(t *testing.T) {
 			},
 		},
 		{
-			name: "watch node always a collection, list-wrapped schema",
-			graph: generator.NewGraph("g",
-				generator.WithDef("naming", map[string]any{"app": "checkout"}),
-				generator.WithWatch("appPods", &expv1alpha1.WatchSpec{
-					APIVersion: "v1", Kind: "Pod",
-					Selector: map[string]string{"app": "${naming.app}"},
-				}),
-			),
-			after: func(t *testing.T, prog *Program, _ *expv1alpha1.Graph) {
-				n := prog.Nodes["appPods"]
-				assert.Equal(t, NodeKindWatch, n.Kind)
-				assert.True(t, n.IsCollection())
-				assert.Equal(t, []string{"naming"}, n.Dependencies)
-				require.Contains(t, prog.NodeSchemas, "appPods")
-				assert.True(t, prog.NodeSchemas["appPods"].Type.Contains("array"))
-			},
-		},
-		{
 			name: "def node feeds template",
 			graph: generator.NewGraph("g",
 				generator.WithDef("naming", map[string]any{"prefix": "team-", "app": "billing"}),
@@ -419,21 +401,6 @@ func TestCompile(t *testing.T) {
 			wantErr: "forEach is not supported on ref nodes",
 		},
 		{
-			name: "forEach on a watch node is rejected (watch is inherently a collection)",
-			graph: generator.NewGraph("g",
-				generator.WithDef("src", map[string]any{"names": []any{"a"}}),
-				generator.WithRawNode(expv1alpha1.Node{
-					ID: "w",
-					Watch: &expv1alpha1.WatchSpec{
-						APIVersion: "v1", Kind: "Pod",
-						Selector: map[string]string{"app": "x"},
-					},
-					ForEach: []expv1alpha1.ForEachDimension{{"n": "${src.names}"}},
-				}),
-			),
-			wantErr: "forEach is not supported on watch nodes",
-		},
-		{
 			name: "cluster-scoped target rejecting metadata.namespace",
 			graph: generator.NewGraph("g", generator.WithTemplate("crd", map[string]any{
 				"apiVersion": "apiextensions.k8s.io/v1",
@@ -570,18 +537,6 @@ func TestCompile(t *testing.T) {
 				Kind:       "MissingKind",
 				Metadata:   expv1alpha1.ExternalRefMetadata{Name: "x"},
 			})),
-			wantErr: "resolve schema",
-		},
-		{
-			name: "watch node with unknown target GVK fails schema resolution",
-			graph: generator.NewGraph("g",
-				generator.WithDef("naming", map[string]any{"app": "x"}),
-				generator.WithWatch("w", &expv1alpha1.WatchSpec{
-					APIVersion: "totally.unknown/v999",
-					Kind:       "MissingKind",
-					Selector:   map[string]string{"app": "${naming.app}"},
-				}),
-			),
 			wantErr: "resolve schema",
 		},
 		{

@@ -102,11 +102,11 @@ type ManagedResource struct {
 }
 
 // Node is a single composable unit within a Graph. Each Node carries exactly
-// one of the type-discriminating fields (Template, Ref, Watch, Def, Graph)
+// one of the type-discriminating fields (Template, Ref, Def, Graph)
 // which determines its behavior. Node IDs are the handles other nodes use to
 // reference it via CEL expressions.
 //
-// +kubebuilder:validation:XValidation:rule="[has(self.template), has(self.ref), has(self.watch), has(self.def), has(self.graph)].exists_one(x, x)",message="exactly one of template, ref, watch, def, graph must be set"
+// +kubebuilder:validation:XValidation:rule="[has(self.template), has(self.ref), has(self.def), has(self.graph)].exists_one(x, x)",message="exactly one of template, ref, def, graph must be set"
 type Node struct {
 	// ID is the handle that other nodes use to reference this node from CEL
 	// expressions. Must be alphanumeric (case-insensitive) and unique within
@@ -129,13 +129,6 @@ type Node struct {
 	//
 	// +kubebuilder:validation:Optional
 	Ref *ExternalRef `json:"ref,omitempty"`
-
-	// Watch makes the collection of resources matching a label selector
-	// available to other nodes through CEL expressions. The set is kept
-	// up-to-date as resources come and go.
-	//
-	// +kubebuilder:validation:Optional
-	Watch *WatchSpec `json:"watch,omitempty"`
 
 	// Def introduces raw data into scope without reading or writing any
 	// Kubernetes resource. The value is a free-form object whose fields may
@@ -162,8 +155,8 @@ type Node struct {
 	// after the node has been applied and its value published, so
 	// expressions typically reference the node's own published state
 	// (e.g. `cluster.status.phase == 'Active'`). Empty means the node is
-	// ready as soon as it is applied. For collection nodes (forEach or
-	// watch) the node's value in scope is a list — use CEL list functions
+	// ready as soon as it is applied. For collection nodes (forEach) the
+	// node's value in scope is a list — use CEL list functions
 	// like `all()` and `exists()`:
 	//     readyWhen: [ "${appPods.all(p, p.status.phase == 'Running')}" ]
 	//
@@ -187,28 +180,6 @@ type Node struct {
 	//
 	// +kubebuilder:validation:Optional
 	ForEach []ForEachDimension `json:"forEach,omitempty"`
-}
-
-// WatchSpec selects a set of resources of a single GroupKind to make available
-// in CEL scope.
-type WatchSpec struct {
-	// APIVersion of the watched resource.
-	//
-	// +kubebuilder:validation:Required
-	APIVersion string `json:"apiVersion"`
-	// Kind of the watched resource.
-	//
-	// +kubebuilder:validation:Required
-	Kind string `json:"kind"`
-	// Namespace to watch. Empty means watch across all namespaces.
-	//
-	// +kubebuilder:validation:Optional
-	Namespace string `json:"namespace,omitempty"`
-	// Selector is a label-equality selector. Values may contain CEL
-	// expressions evaluated in the node's scope before matching.
-	//
-	// +kubebuilder:validation:Optional
-	Selector map[string]string `json:"selector,omitempty"`
 }
 
 // +kubebuilder:object:root=true

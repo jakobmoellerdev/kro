@@ -222,8 +222,8 @@ func (ctx *CompilationContext) buildNode(p *parser.Parser, n *expv1alpha1.Node, 
 	if kind == NodeKindTemplate {
 		descriptors, err = p.ParseResource(payload, sch)
 	} else {
-		// Ref/Watch payloads are synthesized from typed structs (ExternalRef
-		// or WatchSpec). The OpenAPI schema for the target GVK does not match
+		// Ref payloads are synthesized from typed structs (ExternalRef).
+		// The OpenAPI schema for the target GVK does not match
 		// that shape — parse schemaless instead.
 		descriptors, _, err = parser.ParseSchemalessResource(payload)
 	}
@@ -363,12 +363,6 @@ func projectPayload(n *expv1alpha1.Node) (NodeKind, map[string]interface{}, erro
 			return 0, nil, fmt.Errorf("ref: %w", err)
 		}
 		return NodeKindRef, obj, nil
-	case n.Watch != nil:
-		obj, err := runtime.DefaultUnstructuredConverter.ToUnstructured(n.Watch)
-		if err != nil {
-			return 0, nil, fmt.Errorf("watch: %w", err)
-		}
-		return NodeKindWatch, obj, nil
 	case n.Def != nil:
 		obj, err := unmarshalRaw(n.Def.Raw)
 		if err != nil {
