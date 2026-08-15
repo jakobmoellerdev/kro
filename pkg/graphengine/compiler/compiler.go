@@ -31,7 +31,7 @@ import (
 	expv1alpha1 "github.com/kubernetes-sigs/kro/api/v1alpha1"
 	krocel "github.com/kubernetes-sigs/kro/pkg/graphengine/cel"
 	"github.com/kubernetes-sigs/kro/pkg/cel/ast"
-	"github.com/kubernetes-sigs/kro/pkg/graphengine/compiler/dag"
+	"github.com/kubernetes-sigs/kro/pkg/graph/dag"
 	"github.com/kubernetes-sigs/kro/pkg/graphengine/compiler/parser"
 	schemaresolver "github.com/kubernetes-sigs/kro/pkg/graphengine/compiler/schema/resolver"
 	"github.com/kubernetes-sigs/kro/pkg/graphengine/compiler/variable"
