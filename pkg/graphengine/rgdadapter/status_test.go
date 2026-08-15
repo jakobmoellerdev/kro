@@ -59,7 +59,7 @@ func buildRGDWithStatus(statusFields map[string]any) *v1alpha1.ResourceGraphDefi
 				},
 			},
 			Schema: &v1alpha1.Schema{
-				Spec: runtime.RawExtension{Raw: []byte(`{"name":{"type":"string"}}`)},
+				Spec:   runtime.RawExtension{Raw: []byte(`{"name":{"type":"string"}}`)},
 				Status: statusRaw(statusFields),
 			},
 		},

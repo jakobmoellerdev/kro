@@ -121,8 +121,8 @@ type Controller struct {
 	graphEngineExecutor *executor.Simple
 
 	// feature gate flags, captured once at construction time.
-	eventsEnabled    bool
-	metricsEnabled   bool
+	eventsEnabled     bool
+	metricsEnabled    bool
 	rgdOnGraphEnabled bool
 }
 

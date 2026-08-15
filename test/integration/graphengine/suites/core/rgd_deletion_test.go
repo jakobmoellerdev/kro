@@ -294,5 +294,3 @@ func TestRGDDeletion(t *testing.T) {
 	}
 	t.Logf("F5 PASS: ordered-deletion parity — reverse-slice equals ReverseTopologicalLayers for the cm1→cm2 chain")
 }
-
-
