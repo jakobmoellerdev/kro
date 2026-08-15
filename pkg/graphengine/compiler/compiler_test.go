@@ -29,7 +29,7 @@ import (
 
 	expv1alpha1 "github.com/kubernetes-sigs/kro/api/v1alpha1"
 	"github.com/kubernetes-sigs/kro/pkg/graphengine/testutil/generator"
-	testk8s "github.com/kubernetes-sigs/kro/pkg/graphengine/testutil/k8s"
+	testk8s "github.com/kubernetes-sigs/kro/pkg/testutil/k8s"
 )
 
 // ---- shared test helpers ----------------------------------------------------

@@ -35,7 +35,7 @@ import (
 	"github.com/kubernetes-sigs/kro/pkg/graphengine/compiler"
 	krotruntime "github.com/kubernetes-sigs/kro/pkg/graphengine/runtime"
 	"github.com/kubernetes-sigs/kro/pkg/graphengine/testutil/generator"
-	testk8s "github.com/kubernetes-sigs/kro/pkg/graphengine/testutil/k8s"
+	testk8s "github.com/kubernetes-sigs/kro/pkg/testutil/k8s"
 	"github.com/kubernetes-sigs/kro/pkg/graphengine/watchrouter"
 )
 
