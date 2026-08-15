@@ -301,11 +301,19 @@ func schemaAwareScope(rawScope map[string]any, rt *runtime.Runtime) map[string]a
 		case map[string]any:
 			out[k] = celunstructured.UnstructuredToVal(val, &openapi.Schema{Schema: sc})
 		case []any:
-			// Collection nodes: wrap each item.
+			// Collection nodes publish a []any and carry a list-wrapped schema
+			// (Type=array, Items.Schema=element). Each item is an element
+			// object, so it must be wrapped with the ELEMENT schema, not the
+			// array wrapper — wrapping an object with the array schema makes
+			// UnstructuredToVal reject it ("expected an array").
+			itemSchema := sc
+			if sc.Type.Contains("array") && sc.Items != nil && sc.Items.Schema != nil {
+				itemSchema = sc.Items.Schema
+			}
 			list := make([]any, len(val))
 			for i, item := range val {
 				if m, ok := item.(map[string]any); ok {
-					list[i] = celunstructured.UnstructuredToVal(m, &openapi.Schema{Schema: sc})
+					list[i] = celunstructured.UnstructuredToVal(m, &openapi.Schema{Schema: itemSchema})
 				} else {
 					list[i] = item
 				}
@@ -336,19 +344,33 @@ func unmarshalStatusRaw(rgd *v1alpha1.ResourceGraphDefinition) (map[string]inter
 }
 
 // buildStatusEnvForNodes constructs a transient CEL environment whose
-// variable declarations cover every node ID of the runtime's program
-// (declared as dyn), whether or not the node has published into scope yet.
-// This keeps a reference to a not-yet-applied node a runtime data-pending
-// error rather than a compile-time undeclared-reference error.
+// variable declarations cover every node ID of the runtime's program,
+// whether or not the node has published into scope yet. This keeps a
+// reference to a not-yet-applied node a runtime data-pending error rather
+// than a compile-time undeclared-reference error.
+//
+// Collection nodes (forEach templates, selector externalRefs, watch nodes)
+// are declared as list(dyn) rather than the scalar `any` type, so status
+// expressions that range over them — filter / map / sortBy — type-check
+// (CEL rejects `any` as a comprehension range; it must be list, map, or
+// dyn). Scalar nodes stay `any`, matching the schemaless projection contract.
 func buildStatusEnvForNodes(rt *runtime.Runtime, includeRuntime bool) (*cel.Env, error) {
 	nodes := rt.Nodes()
-	ids := make([]string, 0, len(nodes))
+	scalarIDs := make([]string, 0, len(nodes))
+	var listIDs []string
 	for _, n := range nodes {
-		ids = append(ids, n.ID())
+		if n.IsCollection() {
+			listIDs = append(listIDs, n.ID())
+			continue
+		}
+		scalarIDs = append(scalarIDs, n.ID())
 	}
 	opts := []krocel.EnvOption{
-		krocel.WithResourceIDs(ids),
+		krocel.WithResourceIDs(scalarIDs),
 		krocel.WithRuntimeLibrary(includeRuntime),
+	}
+	if len(listIDs) > 0 {
+		opts = append(opts, krocel.WithListVariables(listIDs))
 	}
 	return krocel.DefaultEnvironment(opts...)
 }

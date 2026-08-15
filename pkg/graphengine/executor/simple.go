@@ -25,6 +25,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/labels"
+	apimachineryruntime "k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -230,7 +231,15 @@ func (s *Simple) Apply(ctx context.Context, rt *runtime.Runtime, w watchrouter.W
 			n.SetObserved(desired, desired)
 			publishScope(rt, n, n.Observed())
 		case compiler.NodeKindRef:
-			observed, err := s.applyRef(ctx, w, rt, n, desired)
+			var observed []*unstructured.Unstructured
+			var err error
+			if n.IsCollection() {
+				// A selector externalRef reads a read-only COLLECTION of
+				// external objects by label selector.
+				observed, err = s.applyRefCollection(ctx, w, rt, n, desired)
+			} else {
+				observed, err = s.applyRef(ctx, w, rt, n, desired)
+			}
 			if err != nil {
 				// A referenced object that isn't in the cluster yet is a
 				// soft condition: it may be applied separately or created
@@ -243,10 +252,19 @@ func (s *Simple) Apply(ctx context.Context, rt *runtime.Runtime, w watchrouter.W
 				}
 				return result, fmt.Errorf("apply %q (ref): %w", n.ID(), err)
 			}
-			// Read-only: publish the live object so dependents resolve, but
+			// Read-only: publish the live object(s) so dependents resolve, but
 			// never append to result.Applied — kro must not own, prune, or
-			// delete a resource it only reads.
-			n.SetObserved(observed, desired)
+			// delete a resource it only reads. For a selector collection the
+			// desired set is a single projected ExternalRef (the selector
+			// object), which must NOT be intersected against the observed list
+			// of matched objects, so SetObserved is called with a nil desired
+			// to preserve the list verbatim. publishScope emits a []any because
+			// the node IsCollection.
+			if n.IsCollection() {
+				n.SetObserved(observed, nil)
+			} else {
+				n.SetObserved(observed, desired)
+			}
 			publishScope(rt, n, n.Observed())
 		case compiler.NodeKindWatch:
 			return result, fmt.Errorf("apply %q (%s): %w", n.ID(), n.Kind(), ErrUnsupported)
@@ -499,6 +517,95 @@ func (s *Simple) applyRef(ctx context.Context, w watchrouter.Watcher, rt *runtim
 		return nil, fmt.Errorf("get external ref %s %q: %w", ref.GetKind(), key, err)
 	}
 	return []*unstructured.Unstructured{live}, nil
+}
+
+// applyRefCollection reads the read-only COLLECTION of external objects a
+// selector externalRef points at and returns their live cluster state for
+// publication into scope. It mirrors the classic observeExternalCollection:
+// resolve the label selector off the rendered ExternalRef, register ONE
+// selector-based watch keyed by NodeID, list the GVR by that selector, and
+// publish the matched objects. A selector ref is READ-ONLY: kro never applies,
+// owns, or prunes the matched objects, so the caller must NOT record them in
+// ApplyResult.Applied.
+//
+// Namespace handling deliberately skips defaultNamespace: an empty
+// metadata.namespace for a namespaced GVR means "list across ALL namespaces"
+// (matching classic external-collection semantics), not "the instance's
+// namespace". An empty selector lists everything. A List error is hard; an
+// empty result is valid (an empty collection, treated as ready).
+func (s *Simple) applyRefCollection(ctx context.Context, w watchrouter.Watcher, rt *runtime.Runtime, n *runtime.Node, desired []*unstructured.Unstructured) ([]*unstructured.Unstructured, error) {
+	// forEach is rejected on ref nodes at translate time, so Resolve produced
+	// exactly one projected {apiVersion, kind, metadata{selector,namespace?}}
+	// object with CEL (incl. matchExpressions[].values[]) already evaluated.
+	if len(desired) != 1 {
+		return nil, fmt.Errorf("ref collection node resolved to %d objects, want 1", len(desired))
+	}
+	ref := desired[0]
+
+	selector, err := refCollectionSelector(n.ID(), ref)
+	if err != nil {
+		return nil, err
+	}
+
+	// Namespace comes straight from the rendered ExternalRef. For a namespaced
+	// GVR an empty namespace lists across all namespaces; cluster-scoped GVRs
+	// are always list-all. No defaultNamespace — classic explicitly skips
+	// namespace normalization for external collections.
+	ns := ref.GetNamespace()
+	if !n.Namespaced() {
+		ns = ""
+	}
+
+	// Register the selector watch BEFORE the list so a matching object that
+	// appears between the list and watch registration still re-enqueues the
+	// Graph. The watch is keyed by NodeID with the user's label selector
+	// (matching classic requestCollectionWatch).
+	if w != nil {
+		if err := w.Watch(watchrouter.WatchRequest{
+			NodeID:    n.ID(),
+			GVR:       n.GVR(),
+			Namespace: ns,
+			Selector:  selector,
+		}); err != nil {
+			return nil, fmt.Errorf("register collection watch: %w", err)
+		}
+	}
+
+	list := &unstructured.UnstructuredList{}
+	list.SetGroupVersionKind(ref.GroupVersionKind())
+	opts := []client.ListOption{client.MatchingLabelsSelector{Selector: selector}}
+	if ns != "" {
+		opts = append(opts, client.InNamespace(ns))
+	}
+	if err := s.Client.List(ctx, list, opts...); err != nil {
+		return nil, fmt.Errorf("list external collection %q (%s): %w", n.ID(), n.GVR().String(), err)
+	}
+
+	items := make([]*unstructured.Unstructured, len(list.Items))
+	for i := range list.Items {
+		items[i] = &list.Items[i]
+	}
+	return items, nil
+}
+
+// refCollectionSelector extracts the label selector from a rendered
+// external-collection ExternalRef. A missing or empty metadata.selector means
+// "select everything" (labels.Everything), matching the classic
+// resolveExternalCollectionSelector semantics.
+func refCollectionSelector(id string, ref *unstructured.Unstructured) (labels.Selector, error) {
+	selectorRaw, found, err := unstructured.NestedMap(ref.Object, "metadata", "selector")
+	if err != nil || !found {
+		return labels.Everything(), nil
+	}
+	ls := &metav1.LabelSelector{}
+	if err := apimachineryruntime.DefaultUnstructuredConverter.FromUnstructured(selectorRaw, ls); err != nil {
+		return nil, fmt.Errorf("convert selector for %q: %w", id, err)
+	}
+	selector, err := metav1.LabelSelectorAsSelector(ls)
+	if err != nil {
+		return nil, fmt.Errorf("invalid label selector for %q: %w", id, err)
+	}
+	return selector, nil
 }
 
 // applySubgraph runs a nested Graph node's child Program. The child Runtime
