@@ -31,11 +31,11 @@ import (
 	"github.com/kubernetes-sigs/kro/pkg/apis"
 	"github.com/kubernetes-sigs/kro/pkg/graphengine/compiler"
 	"github.com/kubernetes-sigs/kro/pkg/graphengine/executor"
-	"github.com/kubernetes-sigs/kro/pkg/graphengine/metadata"
 	"github.com/kubernetes-sigs/kro/pkg/graphengine/registry"
 	krotruntime "github.com/kubernetes-sigs/kro/pkg/graphengine/runtime"
 	"github.com/kubernetes-sigs/kro/pkg/graphengine/schemawatcher"
 	"github.com/kubernetes-sigs/kro/pkg/graphengine/watchrouter"
+	"github.com/kubernetes-sigs/kro/pkg/metadata"
 )
 
 // notReadyRequeueAfter is how long we wait before re-checking readiness
