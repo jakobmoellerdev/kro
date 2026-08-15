@@ -24,7 +24,7 @@ import (
 	"k8s.io/kube-openapi/pkg/validation/spec"
 
 	expv1alpha1 "github.com/kubernetes-sigs/kro/api/v1alpha1"
-	"github.com/kubernetes-sigs/kro/pkg/graphengine/compiler/parser"
+	"github.com/kubernetes-sigs/kro/pkg/graph/parser"
 	testk8s "github.com/kubernetes-sigs/kro/pkg/testutil/k8s"
 )
 

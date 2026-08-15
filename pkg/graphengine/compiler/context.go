@@ -28,8 +28,8 @@ import (
 
 	expv1alpha1 "github.com/kubernetes-sigs/kro/api/v1alpha1"
 	krocel "github.com/kubernetes-sigs/kro/pkg/cel"
+	"github.com/kubernetes-sigs/kro/pkg/graph/parser"
 	"github.com/kubernetes-sigs/kro/pkg/graph/variable"
-	"github.com/kubernetes-sigs/kro/pkg/graphengine/compiler/parser"
 	"github.com/kubernetes-sigs/kro/pkg/graphengine/compiler/schema"
 )
 
@@ -456,7 +456,7 @@ func parseForEachDimensions(dims []expv1alpha1.ForEachDimension) ([]ForEachDimen
 	out := make([]ForEachDimension, 0, len(dims))
 	for i, dim := range dims {
 		for name, expr := range dim {
-			parsed, err := parser.ParseConditionExpressions([]string{expr})
+			parsed, err := parser.UnwrapExpressions([]string{expr})
 			if err != nil {
 				return nil, fmt.Errorf("forEach[%d] %q: %w", i, name, err)
 			}
@@ -474,13 +474,13 @@ func parseForEachDimensions(dims []expv1alpha1.ForEachDimension) ([]ForEachDimen
 // by validateAndCompileNode.
 func parseConditions(n *expv1alpha1.Node) (includeWhen, readyWhen []*krocel.Expression, err error) {
 	if len(n.IncludeWhen) > 0 {
-		includeWhen, err = parser.ParseConditionExpressions(n.IncludeWhen)
+		includeWhen, err = parser.UnwrapExpressions(n.IncludeWhen)
 		if err != nil {
 			return nil, nil, fmt.Errorf("includeWhen: %w", err)
 		}
 	}
 	if len(n.ReadyWhen) > 0 {
-		readyWhen, err = parser.ParseConditionExpressions(n.ReadyWhen)
+		readyWhen, err = parser.UnwrapExpressions(n.ReadyWhen)
 		if err != nil {
 			return nil, nil, fmt.Errorf("readyWhen: %w", err)
 		}
