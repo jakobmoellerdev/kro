@@ -245,7 +245,8 @@ func (s *Simple) Apply(ctx context.Context, rt *runtime.Runtime, w watchrouter.W
 		case compiler.NodeKindRef:
 			var observed []*unstructured.Unstructured
 			var err error
-			if n.IsCollection() {
+			isColl := n.IsCollection()
+			if isColl {
 				// A selector externalRef reads a read-only COLLECTION of
 				// external objects by label selector.
 				observed, err = s.applyRefCollection(ctx, w, rt, n, desired)
@@ -272,7 +273,7 @@ func (s *Simple) Apply(ctx context.Context, rt *runtime.Runtime, w watchrouter.W
 			// of matched objects, so SetObserved is called with a nil desired
 			// to preserve the list verbatim. publishScope emits a []any because
 			// the node IsCollection.
-			if n.IsCollection() {
+			if isColl {
 				n.SetObserved(observed, nil)
 			} else {
 				n.SetObserved(observed, desired)

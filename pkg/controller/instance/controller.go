@@ -70,12 +70,6 @@ type ReconcileConfig struct {
 	HasAuthorConditions bool
 }
 
-// GraphRevisionResolver resolves compiled graph revisions for a single RGD.
-//
-// Deprecated: use revisions.Resolver, the shared contract owned by the producer
-// package. Kept as an alias so existing references keep compiling.
-type GraphRevisionResolver = revisions.Resolver
-
 // Controller manages the reconciliation of a single instance of a ResourceGraphDefinition,
 // / it is responsible for reconciling the instance and its sub-resources.
 //
@@ -102,13 +96,12 @@ type Controller struct {
 	client kroclient.SetInterface
 	gvr    schema.GroupVersionResource
 
-	graphResolver GraphRevisionResolver
+	graphResolver revisions.Resolver
 	namespaced    bool
 
-	instanceLabeler      metadata.Labeler
-	childResourceLabeler metadata.Labeler
-	reconcileConfig      ReconcileConfig
-	coordinator          *dynamiccontroller.WatchCoordinator
+	instanceLabeler metadata.Labeler
+	reconcileConfig ReconcileConfig
+	coordinator     *dynamiccontroller.WatchCoordinator
 
 	// eventRecorder emits K8s Events on condition transitions.
 	eventRecorder record.EventRecorder
@@ -125,7 +118,7 @@ type Controller struct {
 }
 
 // NewController constructs a new controller that resolves the newest issued
-// graph revision for the RGD from a GraphRevisionResolver.
+// graph revision for the RGD from a revisions.Resolver.
 //
 // The caller must supply a non-nil graphEngineClient (a controller-runtime
 // client.Client) used by the Graph engine executor, which is the sole
@@ -134,7 +127,7 @@ func NewController(
 	log logr.Logger,
 	reconcileConfig ReconcileConfig,
 	gvr schema.GroupVersionResource,
-	graphResolver GraphRevisionResolver,
+	graphResolver revisions.Resolver,
 	namespaced bool,
 	kroClient kroclient.SetInterface,
 	instanceLabeler metadata.Labeler,
@@ -157,19 +150,18 @@ func NewController(
 	// because it requires rest.Config which the caller owns.
 
 	return &Controller{
-		log:                  log,
-		client:               kroClient,
-		gvr:                  gvr,
-		graphResolver:        graphResolver,
-		namespaced:           namespaced,
-		instanceLabeler:      instanceLabeler,
-		childResourceLabeler: childResourceLabeler,
-		reconcileConfig:      reconcileConfig,
-		coordinator:          coord,
-		eventRecorder:        eventRecorder,
-		graphEngineExecutor:  exec,
-		eventsEnabled:        features.FeatureGate.Enabled(features.InstanceConditionEvents),
-		metricsEnabled:       features.FeatureGate.Enabled(features.InstanceConditionMetrics),
+		log:                 log,
+		client:              kroClient,
+		gvr:                 gvr,
+		graphResolver:       graphResolver,
+		namespaced:          namespaced,
+		instanceLabeler:     instanceLabeler,
+		reconcileConfig:     reconcileConfig,
+		coordinator:         coord,
+		eventRecorder:       eventRecorder,
+		graphEngineExecutor: exec,
+		eventsEnabled:       features.FeatureGate.Enabled(features.InstanceConditionEvents),
+		metricsEnabled:      features.FeatureGate.Enabled(features.InstanceConditionMetrics),
 	}
 }
 
@@ -292,35 +284,22 @@ func (c *Controller) reconcileSuspended(ctx context.Context, inst *unstructured.
 	}
 
 	wireStatus := captureWireStatus(inst)
-	previousState, _ := wireStatus["state"].(string)
 
 	mark := NewConditionsMarkerFor(inst)
 	mark.InstanceManaged()
 	mark.GraphResolved()
 	mark.ReconciliationSuspended("reconciliation suspended via %s annotation", v1alpha1.InstanceReconcileAnnotation)
 
-	// No nodes are reconciled, so the instance-level state mirrors the classic
-	// empty-StateManager result (Active); initialStatus downgrades it only when
-	// the aggregate Ready condition is not satisfied.
-	status := initialStatus(inst, &StateManager{State: v1alpha1.InstanceStateActive})
-	for k, v := range wireStatus {
-		if k != "conditions" && k != "state" {
-			status[k] = v
-		}
-	}
-	// When the RGD owns the condition surface, preserve the previously
-	// persisted author conditions (they cannot be re-evaluated without
-	// reconciling) and overlay kro's ResourcesReady suspend condition.
-	if c.reconcileConfig.HasAuthorConditions {
-		status["conditions"] = deletionConditions(inst, wireStatus)
-	}
-
+	// No nodes are reconciled, so the instance-level state is Active (there is
+	// nothing to mark not-ready beyond the suspend condition). Author conditions
+	// are carried forward from the wire since they cannot be re-evaluated while
+	// suspended.
 	ri := c.client.Dynamic().Resource(c.gvr)
 	var instanceClient dynamic.ResourceInterface = ri
 	if c.namespaced {
 		instanceClient = ri.Namespace(inst.GetNamespace())
 	}
-	return c.persistStatus(ctx, instanceClient, inst, wireStatus, status, previousState)
+	return c.persistNodeFreeStatus(ctx, instanceClient, inst, wireStatus, v1alpha1.InstanceStateActive)
 }
 
 // stampInstanceMetadata is a context-free variant of ensureManaged used by the

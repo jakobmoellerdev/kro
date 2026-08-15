@@ -30,7 +30,6 @@ import (
 // BuildRuntimeForInstance needs. Production callers pass *compiler.Compiler
 // directly; tests may pass a narrower stub.
 type Compiler interface {
-	Compile(g *v1alpha1.Graph) (*compiler.Program, error)
 	CompileWithOptions(g *v1alpha1.Graph, opts ...compiler.CompileOption) (*compiler.Program, error)
 }
 

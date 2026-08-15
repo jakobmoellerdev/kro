@@ -43,8 +43,7 @@ func TestConditionsMarkerAndInitialStatus(t *testing.T) {
 	marker.GraphResolved()
 	marker.ResourcesReady()
 
-	sm := &StateManager{State: v1alpha1.InstanceStateInProgress}
-	status := initialStatus(instance, sm)
+	status := initialStatus(instance, v1alpha1.InstanceStateInProgress)
 	assert.Equal(t, string(v1alpha1.InstanceStateActive), status["state"])
 
 	marker.ResourcesNotReady("not yet")
@@ -52,8 +51,7 @@ func TestConditionsMarkerAndInitialStatus(t *testing.T) {
 	marker.InstanceNotManaged("nope")
 	marker.GraphResolutionFailed("bad graph")
 
-	sm.State = v1alpha1.InstanceStateDeleting
-	status = initialStatus(instance, sm)
+	status = initialStatus(instance, v1alpha1.InstanceStateDeleting)
 	assert.Equal(t, string(v1alpha1.InstanceStateDeleting), status["state"])
 
 	assert.Equal(t, metav1.ConditionFalse, conditionByType(t, instance, InstanceManaged).Status)

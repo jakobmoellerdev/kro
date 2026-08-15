@@ -145,31 +145,12 @@ func (b *Builder) NewResourceGraphDefinition(originalCR *v1alpha1.ResourceGraphD
 		return nil, fmt.Errorf("failed to validate resourcegraphdefinition: %w", err)
 	}
 
-	crdScope := extv1.NamespaceScoped
-	if rgd.Spec.Schema.Scope == v1alpha1.ResourceScopeCluster {
-		crdScope = extv1.ClusterScoped
-	}
-
-	// SimpleSchema -> instance spec schema, then synthesize the CRD (status filled
-	// in later once inferred). Both depend only on the schema block, not resources,
-	// so they are computed up front and fed to CompileSource via the Source.
-	instanceSpecSchema, err := buildInstanceSpecSchema(rgd.Spec.Schema)
+	// SimpleSchema -> instance spec schema -> synthesized CRD + status-stripped
+	// CEL schema + scope. Depends only on the schema block, not resources, so it
+	// is computed up front and fed to CompileSource via the Source.
+	instanceCRD, schemaWithoutStatus, crdScope, err := synthesizeInstanceCRD(rgd)
 	if err != nil {
 		return nil, fmt.Errorf("failed to build resourcegraphdefinition %q: %w", rgd.Name, err)
-	}
-	instanceCRD := crd.SynthesizeCRD(
-		rgd.Spec.Schema.Group,
-		rgd.Spec.Schema.APIVersion,
-		rgd.Spec.Schema.Kind,
-		*instanceSpecSchema,
-		extv1.JSONSchemaProps{}, // empty status placeholder
-		false,                   // don't add default fields yet
-		crdScope,
-		rgd.Spec.Schema,
-	)
-	schemaWithoutStatus, err := getSchemaWithoutStatus(instanceCRD)
-	if err != nil {
-		return nil, fmt.Errorf("failed to get schema without status: %w", err)
 	}
 
 	resourceSpecs := make([]ResourceSpec, 0, len(rgd.Spec.Resources))
@@ -208,12 +189,22 @@ func (b *Builder) NewResourceGraphDefinition(originalCR *v1alpha1.ResourceGraphD
 // compile-time typing matches the classic builder instead of being inferred
 // from the current instance value.
 func InstanceSchemaForCEL(rgd *v1alpha1.ResourceGraphDefinition) (*spec.Schema, error) {
+	_, schemaWithoutStatus, _, err := synthesizeInstanceCRD(rgd)
+	return schemaWithoutStatus, err
+}
+
+// synthesizeInstanceCRD converts the RGD's SimpleSchema into the instance CRD
+// (status placeholder empty, filled in later once inferred) and the
+// status-stripped OpenAPI schema bound to the `schema` CEL variable, plus the
+// CRD scope. Shared by NewResourceGraphDefinition and InstanceSchemaForCEL so
+// the compile-time typing and the synthesized CRD stay in lock-step.
+func synthesizeInstanceCRD(rgd *v1alpha1.ResourceGraphDefinition) (*extv1.CustomResourceDefinition, *spec.Schema, extv1.ResourceScope, error) {
 	if rgd.Spec.Schema == nil {
-		return nil, fmt.Errorf("resourcegraphdefinition %q: schema is required", rgd.Name)
+		return nil, nil, "", fmt.Errorf("resourcegraphdefinition %q: schema is required", rgd.Name)
 	}
 	instanceSpecSchema, err := buildInstanceSpecSchema(rgd.Spec.Schema)
 	if err != nil {
-		return nil, err
+		return nil, nil, "", err
 	}
 	crdScope := extv1.NamespaceScoped
 	if rgd.Spec.Schema.Scope == v1alpha1.ResourceScopeCluster {
@@ -229,7 +220,11 @@ func InstanceSchemaForCEL(rgd *v1alpha1.ResourceGraphDefinition) (*spec.Schema, 
 		crdScope,
 		rgd.Spec.Schema,
 	)
-	return getSchemaWithoutStatus(instanceCRD)
+	schemaWithoutStatus, err := getSchemaWithoutStatus(instanceCRD)
+	if err != nil {
+		return nil, nil, "", err
+	}
+	return instanceCRD, schemaWithoutStatus, crdScope, nil
 }
 
 // rgdSource adapts a ResourceGraphDefinition's precomputed pieces to Source.

@@ -90,11 +90,11 @@ func (c *Controller) reconcileViaGraphEngine(
 		)
 	}
 	if latest.RGDSpec == nil {
-		// F6a shortcut: revisions compiled before F6a don't carry RGDSpec.
-		// Fall back to the old path so we don't break already-running
-		// controllers after a rolling upgrade.
-		log.V(1).Info("graph-engine: RGDSpec not available in revision (pre-F6a entry); falling back to runtime path")
-		return c.reconcileViaRuntimeFallback(ctx, inst)
+		// A revision compiled before F6a doesn't carry RGDSpec. There is no
+		// engine to run yet — requeue until the graphrevision controller
+		// reprocesses the revision and repopulates it.
+		log.V(1).Info("graph-engine: RGDSpec not available in revision (pre-F6a entry); requeueing until repopulated")
+		return c.requeueUntilRGDSpecPopulated(ctx, inst)
 	}
 
 	rgd := &v1alpha1.ResourceGraphDefinition{
@@ -109,9 +109,6 @@ func (c *Controller) reconcileViaGraphEngine(
 	//------------------------------------------------------------------
 	if c.graphEngineCompiler == nil {
 		return fmt.Errorf("graph-engine: compiler not wired (WithGraphEngineCompiler not called); this is a programming error")
-	}
-	if c.graphEngineExecutor == nil {
-		return fmt.Errorf("graph-engine: executor not wired (graphEngineClient not supplied to NewController); this is a programming error")
 	}
 
 	//------------------------------------------------------------------
@@ -227,11 +224,11 @@ func (c *Controller) reconcileViaGraphEngine(
 	return applyErr
 }
 
-// reconcileViaRuntimeFallback is called when the revision entry pre-dates
-// F6a (RGDSpec == nil).  It requeues so that once
-// the graphrevision controller has processed the revision and populated RGDSpec
-// the instance picks up the Graph-engine path on the next cycle.
-func (c *Controller) reconcileViaRuntimeFallback(_ context.Context, _ *unstructured.Unstructured) error {
+// requeueUntilRGDSpecPopulated handles a revision entry that pre-dates F6a
+// (RGDSpec == nil). There is no engine to run yet, so it requeues until the
+// graphrevision controller reprocesses the revision and populates RGDSpec, at
+// which point the instance picks up the Graph-engine path on the next cycle.
+func (c *Controller) requeueUntilRGDSpecPopulated(_ context.Context, _ *unstructured.Unstructured) error {
 	return requeue.NeededAfter(
 		fmt.Errorf("graph-engine: revision entry has no RGDSpec (pre-F6a entry); waiting for graphrevision controller to repopulate"),
 		c.reconcileConfig.DefaultRequeueDuration,
@@ -563,9 +560,7 @@ func (b *instanceWatcherBridge) Done(commit bool) {
 // managed resource that is currently terminating. It matches both the
 // distinguishable sentinel and the typed error the executor wraps.
 func isResourceDeleting(err error) bool {
-	if errors.Is(err, executor.ErrResourceDeleting) {
-		return true
-	}
-	var delErr *executor.ResourceDeletingError
-	return errors.As(err, &delErr)
+	// (*ResourceDeletingError).Is reports ErrResourceDeleting, so errors.Is
+	// matches the typed error anywhere in the chain — no separate errors.As.
+	return errors.Is(err, executor.ErrResourceDeleting)
 }

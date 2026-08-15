@@ -32,6 +32,7 @@ import (
 	"github.com/google/cel-go/common/types"
 	"github.com/google/cel-go/common/types/ref"
 	"github.com/google/cel-go/common/types/traits"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apiserver/pkg/cel/openapi"
 
 	"github.com/kubernetes-sigs/kro/api/v1alpha1"
@@ -377,30 +378,19 @@ func buildStatusEnvForNodes(rt *runtime.Runtime, includeRuntime bool) (*cel.Env,
 
 // getAtPath reads the value at the dotted path in m, navigating
 // map[string]any levels only. Only simple dot-separated paths (no array
-// indices) are supported — same limitation as setAtPath.
+// indices) are supported — same limitation as setAtPath. A non-map
+// intermediate is treated as not-found.
 func getAtPath(m map[string]any, path string) (any, bool) {
-	parts := strings.Split(path, ".")
-	cur := m
-	for i, part := range parts {
-		v, ok := cur[part]
-		if !ok {
-			return nil, false
-		}
-		if i == len(parts)-1 {
-			return v, true
-		}
-		next, ok := v.(map[string]any)
-		if !ok {
-			return nil, false
-		}
-		cur = next
+	v, found, err := unstructured.NestedFieldNoCopy(m, strings.Split(path, ".")...)
+	if err != nil || !found {
+		return nil, false
 	}
-	return nil, false
+	return v, true
 }
 
-// evalStatusExpr compiles and evaluates a plain CEL expression (no ${…}
-// wrapper) against scope.  Returns the Go-native result.
-func evalStatusExpr(env *cel.Env, scope map[string]any, expr string) (any, error) {
+// compileCEL parses, type-checks, and programs a plain CEL expression (no
+// ${…} wrapper) against env, wrapping each stage's error with expr context.
+func compileCEL(env *cel.Env, expr string) (cel.Program, error) {
 	parsed, issues := env.Parse(expr)
 	if issues != nil && issues.Err() != nil {
 		return nil, fmt.Errorf("parse %q: %w", expr, issues.Err())
@@ -412,6 +402,16 @@ func evalStatusExpr(env *cel.Env, scope map[string]any, expr string) (any, error
 	prog, err := env.Program(checked)
 	if err != nil {
 		return nil, fmt.Errorf("program %q: %w", expr, err)
+	}
+	return prog, nil
+}
+
+// evalStatusExpr compiles and evaluates a plain CEL expression (no ${…}
+// wrapper) against scope.  Returns the Go-native result.
+func evalStatusExpr(env *cel.Env, scope map[string]any, expr string) (any, error) {
+	prog, err := compileCEL(env, expr)
+	if err != nil {
+		return nil, err
 	}
 	e := &krocel.Expression{Original: expr, Program: prog}
 	return e.Eval(scope)
@@ -422,17 +422,9 @@ func evalStatusExpr(env *cel.Env, scope map[string]any, expr string) (any, error
 // cel.Program.Eval directly (not krocel.Expression.Eval) because Go-native
 // conversion does not know the custom *library.Condition ref.Val type.
 func evalConditionRaw(env *cel.Env, scope map[string]any, expr string) (ref.Val, error) {
-	parsed, issues := env.Parse(expr)
-	if issues != nil && issues.Err() != nil {
-		return nil, fmt.Errorf("parse %q: %w", expr, issues.Err())
-	}
-	checked, issues := env.Check(parsed)
-	if issues != nil && issues.Err() != nil {
-		return nil, fmt.Errorf("check %q: %w", expr, issues.Err())
-	}
-	prog, err := env.Program(checked)
+	prog, err := compileCEL(env, expr)
 	if err != nil {
-		return nil, fmt.Errorf("program %q: %w", expr, err)
+		return nil, err
 	}
 	out, _, err := prog.Eval(scope)
 	if err != nil {
