@@ -24,7 +24,7 @@ import (
 	krocel "github.com/kubernetes-sigs/kro/pkg/cel"
 	"github.com/kubernetes-sigs/kro/pkg/graph/variable"
 	"github.com/kubernetes-sigs/kro/pkg/graphengine/compiler"
-	"github.com/kubernetes-sigs/kro/pkg/graphengine/runtime/resolver"
+	"github.com/kubernetes-sigs/kro/pkg/runtime/resolver"
 )
 
 // Node is the runtime view of a single compiled Node. It carries the
