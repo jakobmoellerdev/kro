@@ -48,6 +48,8 @@ type fakeExecutor struct {
 	applyResult executor.ApplyResult
 	deleteErr   error
 	deleteCalls [][]expv1alpha1.ManagedResource // captures every Delete invocation in order
+	releaseErr  error
+	releaseCalls [][]executor.Contribution // captures every Release invocation in order
 }
 
 func (f *fakeExecutor) Apply(context.Context, *krotruntime.Runtime, watchrouter.Watcher) (executor.ApplyResult, error) {
@@ -56,6 +58,10 @@ func (f *fakeExecutor) Apply(context.Context, *krotruntime.Runtime, watchrouter.
 func (f *fakeExecutor) Delete(_ context.Context, resources []expv1alpha1.ManagedResource) error {
 	f.deleteCalls = append(f.deleteCalls, resources)
 	return f.deleteErr
+}
+func (f *fakeExecutor) Release(_ context.Context, contributions []executor.Contribution) error {
+	f.releaseCalls = append(f.releaseCalls, contributions)
+	return f.releaseErr
 }
 
 // patchErrClient is a fake client that fails Patch (and optionally Get)

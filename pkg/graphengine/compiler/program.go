@@ -36,6 +36,7 @@ const (
 	NodeKindRef
 	NodeKindDef
 	NodeKindGraph
+	NodeKindPatch
 )
 
 // String returns the lowercase keyword for the node kind, matching the API.
@@ -49,6 +50,8 @@ func (k NodeKind) String() string {
 		return "def"
 	case NodeKindGraph:
 		return "graph"
+	case NodeKindPatch:
+		return "patch"
 	default:
 		return "unknown"
 	}
@@ -88,6 +91,11 @@ type Node struct {
 	// still checked) and their GVR/Namespaced are resolved per rendered
 	// object by the executor.
 	DynamicGVK bool
+
+	// Subresource is the target subresource a Patch node contributes to.
+	// Empty for every other kind and for patches that target the main
+	// resource; "status" routes the apply through the status subresource.
+	Subresource string
 
 	// Object is the parsed payload as an unstructured object:
 	//   Template: the user-authored manifest

@@ -234,6 +234,11 @@ func (ctx *CompilationContext) compileFrame(apiNodes []expv1alpha1.Node, isRoot 
 	// Wrap collection node schemas as lists so other nodes see them as arrays.
 	celSchemas := make(map[string]*spec.Schema, len(nodeSchemas))
 	for id, sch := range nodeSchemas {
+		// Patch nodes contribute fields to a target they do not own; they
+		// publish no value into scope, so they are not typed identifiers.
+		if nodes[id].Kind == NodeKindPatch {
+			continue
+		}
 		if nodes[id].IsCollection() {
 			celSchemas[id] = ctx.fieldCache.WrapAsList(sch)
 		} else {
@@ -265,7 +270,9 @@ func (ctx *CompilationContext) compileFrame(apiNodes []expv1alpha1.Node, isRoot 
 			continue // already compiled in its own frame
 		}
 		var payloadSchema *spec.Schema
-		if node.Kind == NodeKindTemplate {
+		if node.Kind == NodeKindTemplate || node.Kind == NodeKindPatch {
+			// A patch body is typed against the target schema exactly as a
+			// template is typed against its own manifest schema.
 			payloadSchema = nodeSchemas[id]
 		}
 		// elementSchema is the unwrapped per-node schema (element type for
@@ -333,7 +340,7 @@ func unmarshalGraphSpec(raw []byte) ([]expv1alpha1.Node, error) {
 // "which Graphs care about which CRDs."
 //
 // Def nodes contribute nothing — they don't reference cluster schemas.
-// Template/Ref nodes contribute their target GroupKind. A subgraph
+// Template/Ref/Patch nodes contribute their target GroupKind. A subgraph
 // node folds in its child Program's already-aggregated dependencies, so the
 // root Program ends up with the full set across every nesting level — the
 // SchemaWatcher tracks all of them.

@@ -106,7 +106,7 @@ type ManagedResource struct {
 // which determines its behavior. Node IDs are the handles other nodes use to
 // reference it via CEL expressions.
 //
-// +kubebuilder:validation:XValidation:rule="[has(self.template), has(self.ref), has(self.def), has(self.graph)].exists_one(x, x)",message="exactly one of template, ref, def, graph must be set"
+// +kubebuilder:validation:XValidation:rule="[has(self.template), has(self.ref), has(self.def), has(self.graph), has(self.patch)].exists_one(x, x)",message="exactly one of template, ref, def, graph, patch must be set"
 type Node struct {
 	// ID is the handle that other nodes use to reference this node from CEL
 	// expressions. Must be alphanumeric (case-insensitive) and unique within
@@ -150,6 +150,17 @@ type Node struct {
 	// +kubebuilder:pruning:PreserveUnknownFields
 	Graph *runtime.RawExtension `json:"graph,omitempty"`
 
+	// Patch contributes fields to a resource this node does not own. The
+	// target identified by APIVersion, Kind, and Metadata must already
+	// exist; the node applies the contributed body under a dedicated
+	// field manager (server-side apply) without taking ownership of the
+	// whole object. On prune the contributed fields are released — the
+	// field manager relinquishes them — but the target object is never
+	// deleted. A patch may target the status subresource.
+	//
+	// +kubebuilder:validation:Optional
+	Patch *PatchSpec `json:"patch,omitempty"`
+
 	// ReadyWhen is a list of CEL expressions that must all evaluate to
 	// true for this node to be considered ready. Evaluated against scope
 	// after the node has been applied and its value published, so
@@ -180,6 +191,65 @@ type Node struct {
 	//
 	// +kubebuilder:validation:Optional
 	ForEach []ForEachDimension `json:"forEach,omitempty"`
+}
+
+// PatchMetadata identifies the target object a patch node contributes to.
+// Name is required and may be a CEL expression; Namespace is optional and
+// defaults to the Graph's namespace for namespaced targets.
+type PatchMetadata struct {
+	// Name of the target object. May be a CEL expression.
+	//
+	// +kubebuilder:validation:Required
+	// +kubebuilder:validation:MinLength=1
+	Name string `json:"name"`
+
+	// Namespace of the target object. Empty defaults to the Graph's
+	// namespace for namespaced targets. May be a CEL expression.
+	//
+	// +kubebuilder:validation:Optional
+	Namespace string `json:"namespace,omitempty"`
+}
+
+// PatchSpec declares a set of fields a patch node contributes to a target
+// resource it does not own. APIVersion and Kind name the target GVK and may
+// be CEL expressions (dynamic GVK). Body carries the contributed fields as a
+// partial manifest (top-level keys such as spec, data, or status); it is
+// server-side applied over the target under a per-node field manager.
+type PatchSpec struct {
+	// APIVersion of the target resource ("apps/v1", "v1", ...). May be a
+	// CEL expression.
+	//
+	// +kubebuilder:validation:Required
+	APIVersion string `json:"apiVersion"`
+
+	// Kind of the target resource ("Deployment", "ConfigMap", ...). May be
+	// a CEL expression.
+	//
+	// +kubebuilder:validation:Required
+	Kind string `json:"kind"`
+
+	// Metadata identifies the target object by name (and optional
+	// namespace).
+	//
+	// +kubebuilder:validation:Required
+	Metadata PatchMetadata `json:"metadata"`
+
+	// Subresource selects the target subresource the contribution applies
+	// to. Empty applies to the main resource; "status" routes the apply
+	// through the status subresource.
+	//
+	// +kubebuilder:validation:Optional
+	// +kubebuilder:validation:Enum="";status
+	Subresource string `json:"subresource,omitempty"`
+
+	// Body holds the contributed fields as a partial object. Top-level
+	// keys (spec, data, status, metadata, ...) are merged onto the target's
+	// apiVersion/kind/metadata identity before apply. Values may contain
+	// CEL expressions that reference other nodes.
+	//
+	// +kubebuilder:validation:Optional
+	// +kubebuilder:pruning:PreserveUnknownFields
+	Body *runtime.RawExtension `json:"body,omitempty"`
 }
 
 // +kubebuilder:object:root=true

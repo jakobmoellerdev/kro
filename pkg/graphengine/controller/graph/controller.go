@@ -100,6 +100,15 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 				return ctrl.Result{}, fmt.Errorf("executor delete: %w", err)
 			}
 		}
+		// Release every recorded patch contribution so the field managers
+		// relinquish their fields. Targets survive — patches never own them.
+		if contribs, err := readContributions(&g); err != nil {
+			logger.Error(err, "malformed patch-contribution inventory on delete; skipping release")
+		} else if len(contribs) > 0 {
+			if err := r.Executor.Release(ctx, contribs); err != nil {
+				return ctrl.Result{}, fmt.Errorf("executor release: %w", err)
+			}
+		}
 		r.Registry.Delete(req.NamespacedName)
 		if r.Router != nil {
 			r.Router.RemoveGraph(req.NamespacedName)
@@ -173,6 +182,13 @@ func (r *Reconciler) reconcileGraph(ctx context.Context, g *expv1alpha1.Graph) e
 	rt := krotruntime.New(prog, g)
 	watcher := r.watcherFor(key)
 	previous := g.Status.ManagedResources
+	priorContribs, err := readContributions(g)
+	if err != nil {
+		// A malformed inventory shouldn't wedge the reconcile; log and treat
+		// as empty. The current cycle rewrites it from the fresh apply.
+		log.FromContext(ctx).Error(err, "malformed patch-contribution inventory; treating as empty")
+		priorContribs = nil
+	}
 
 	result, applyErr := r.Executor.Apply(ctx, rt, watcher)
 
@@ -236,9 +252,59 @@ func (r *Reconciler) reconcileGraph(ctx context.Context, g *expv1alpha1.Graph) e
 	}
 
 	if applyErr != nil {
+		// Soft or hard failure — keep the union so a future reconcile can
+		// release contributions we couldn't observe cleanly this cycle.
+		if err := r.persistContributions(ctx, g, unionContributions(priorContribs, result.Contributions)); err != nil {
+			return errors.Join(fmt.Errorf("apply: %w", applyErr), err)
+		}
 		log.FromContext(ctx).Error(applyErr, "executor apply failed")
 		return fmt.Errorf("apply: %w", applyErr)
 	}
+
+	// Clean apply: release contributions whose patch node was removed or
+	// whose target changed, then persist the current inventory. Release runs
+	// before persist so a release failure keeps the prior inventory for the
+	// next reconcile.
+	if released := diffContributions(priorContribs, result.Contributions); len(released) > 0 {
+		if err := r.Executor.Release(ctx, released); err != nil {
+			if perr := r.persistContributions(ctx, g, unionContributions(priorContribs, result.Contributions)); perr != nil {
+				return errors.Join(fmt.Errorf("release contributions: %w", err), perr)
+			}
+			return fmt.Errorf("release contributions: %w", err)
+		}
+	}
+	if err := r.persistContributions(ctx, g, result.Contributions); err != nil {
+		return err
+	}
+	return nil
+}
+
+// persistContributions writes the patch-contribution inventory onto the
+// Graph as an annotation, patching only when the value changed. An empty
+// inventory drops the annotation.
+func (r *Reconciler) persistContributions(ctx context.Context, g *expv1alpha1.Graph, contribs []executor.Contribution) error {
+	value, err := marshalContributions(contribs)
+	if err != nil {
+		return fmt.Errorf("marshal contributions: %w", err)
+	}
+	if g.GetAnnotations()[metadata.PatchContributionsAnnotation] == value {
+		return nil
+	}
+	dc := g.DeepCopy()
+	anns := dc.GetAnnotations()
+	if anns == nil {
+		anns = map[string]string{}
+	}
+	if value == "" {
+		delete(anns, metadata.PatchContributionsAnnotation)
+	} else {
+		anns[metadata.PatchContributionsAnnotation] = value
+	}
+	dc.SetAnnotations(anns)
+	if err := r.Client.Patch(ctx, dc, client.MergeFrom(g)); err != nil {
+		return fmt.Errorf("persist contributions: %w", err)
+	}
+	g.SetAnnotations(anns)
 	return nil
 }
 

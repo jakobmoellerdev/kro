@@ -177,23 +177,25 @@ func (ctx *CompilationContext) buildNode(p *parser.Parser, n *expv1alpha1.Node, 
 		return node, inferDefSchema(payload), nil
 	}
 
-	// A Template whose apiVersion or kind is a CEL expression has no
-	// compile-time GVK: we can't resolve a schema, a REST mapping, or
+	// A Template or Patch whose apiVersion or kind is a CEL expression has
+	// no compile-time GVK: we can't resolve a schema, a REST mapping, or
 	// type-check the payload against a target shape. Parse it schemaless,
 	// flag it dynamic, and let the executor resolve the concrete GVK
 	// per rendered object at apply time. Cross-node references inside the
 	// payload are still type-checked later against the typed env; only the
 	// node's own field types fall back to dyn.
-	if kind == NodeKindTemplate && isDynamicGVK(payload) {
-		return ctx.buildDynamicTemplateNode(n, order, payload)
+	if (kind == NodeKindTemplate || kind == NodeKindPatch) && isDynamicGVK(payload) {
+		return ctx.buildDynamicNode(n, order, payload, kind)
 	}
 
-	// Template/Ref all target a real GVK. Resolve schema and
+	// Template/Ref/Patch all target a real GVK. Resolve schema and
 	// REST mapping, then parse the payload for CEL fragments.
-	// Templates are user-authored manifests so we enforce metadata-shape
-	// strictly. Ref payloads are synthesized from typed structs that don't
-	// carry a metadata field — apiVersion + kind are still required.
-	if err := validateKubernetesObjectStructure(payload, kind == NodeKindTemplate); err != nil {
+	// Templates and patches are authored manifests so we enforce
+	// metadata-shape strictly. Ref payloads are synthesized from typed
+	// structs that don't carry a metadata field — apiVersion + kind are
+	// still required.
+	authoredManifest := kind == NodeKindTemplate || kind == NodeKindPatch
+	if err := validateKubernetesObjectStructure(payload, authoredManifest); err != nil {
 		return nil, nil, err
 	}
 	gvk, err := extractGVKFromUnstructured(payload)
@@ -218,7 +220,9 @@ func (ctx *CompilationContext) buildNode(p *parser.Parser, n *expv1alpha1.Node, 
 	}
 
 	var descriptors []variable.FieldDescriptor
-	if kind == NodeKindTemplate {
+	if kind == NodeKindTemplate || kind == NodeKindPatch {
+		// A patch body is a partial manifest shaped like the target, so it
+		// type-checks against the target schema exactly as a template does.
 		descriptors, err = p.ParseResource(payload, sch)
 	} else {
 		// Ref payloads are synthesized from typed structs (ExternalRef).
@@ -245,6 +249,7 @@ func (ctx *CompilationContext) buildNode(p *parser.Parser, n *expv1alpha1.Node, 
 		Kind:        kind,
 		GVR:         mapping.Resource,
 		Namespaced:  mapping.Scope.Name() == meta.RESTScopeNameNamespace,
+		Subresource: patchSubresource(n),
 		Object:      &unstructured.Unstructured{Object: payload},
 		Variables:   fieldDescriptorsToVariables(descriptors),
 		ForEach:     forEach,
@@ -257,20 +262,30 @@ func (ctx *CompilationContext) buildNode(p *parser.Parser, n *expv1alpha1.Node, 
 	}, sch, nil
 }
 
-// buildDynamicTemplateNode compiles a Template whose apiVersion or kind is a
-// CEL expression. There is no compile-time GVK, so we skip schema resolution
-// and REST mapping, parse the payload schemaless, and mark the node dynamic.
-// metadata is still required (templates are user-authored) and apiVersion/
-// kind must be non-empty strings, but the version segment isn't validated —
-// it isn't a literal version yet. The node publishes no schema (nil), so
-// downstream references see it as dyn until the executor pins the GVK.
-func (ctx *CompilationContext) buildDynamicTemplateNode(n *expv1alpha1.Node, order int, payload map[string]interface{}) (*Node, *spec.Schema, error) {
+// patchSubresource returns the target subresource for a patch node and ""
+// for every other kind.
+func patchSubresource(n *expv1alpha1.Node) string {
+	if n.Patch != nil {
+		return n.Patch.Subresource
+	}
+	return ""
+}
+
+// buildDynamicNode compiles a Template or Patch whose apiVersion or kind is
+// a CEL expression. There is no compile-time GVK, so we skip schema
+// resolution and REST mapping, parse the payload schemaless, and mark the
+// node dynamic. metadata is still required (payloads are authored) and
+// apiVersion/kind must be non-empty strings, but the version segment isn't
+// validated — it isn't a literal version yet. The node publishes no schema
+// (nil), so downstream references see it as dyn until the executor pins the
+// GVK.
+func (ctx *CompilationContext) buildDynamicNode(n *expv1alpha1.Node, order int, payload map[string]interface{}, kind NodeKind) (*Node, *spec.Schema, error) {
 	if err := validateDynamicTemplateStructure(payload); err != nil {
 		return nil, nil, err
 	}
 	descriptors, _, err := parser.ParseSchemalessResource(payload)
 	if err != nil {
-		return nil, nil, fmt.Errorf("parse dynamic template payload: %w", err)
+		return nil, nil, fmt.Errorf("parse dynamic %s payload: %w", kind, err)
 	}
 	forEach, err := parseForEachDimensions(n.ForEach)
 	if err != nil {
@@ -283,8 +298,9 @@ func (ctx *CompilationContext) buildDynamicTemplateNode(n *expv1alpha1.Node, ord
 	return &Node{
 		ID:          n.ID,
 		Index:       order,
-		Kind:        NodeKindTemplate,
+		Kind:        kind,
 		DynamicGVK:  true,
+		Subresource: patchSubresource(n),
 		Object:      &unstructured.Unstructured{Object: payload},
 		Variables:   fieldDescriptorsToVariables(descriptors),
 		ForEach:     forEach,
@@ -306,8 +322,8 @@ func isDynamicGVK(payload map[string]interface{}) bool {
 	return false
 }
 
-// validateDynamicTemplateStructure checks a dynamic-GVK template has the
-// minimum shape: apiVersion + kind present as non-empty strings (their
+// validateDynamicTemplateStructure checks a dynamic-GVK template or patch has
+// the minimum shape: apiVersion + kind present as non-empty strings (their
 // content is a CEL expression, resolved at runtime) and a metadata object.
 // Unlike validateKubernetesObjectStructure it does not parse apiVersion as
 // group/version or enforce the version regex.
@@ -368,9 +384,42 @@ func projectPayload(n *expv1alpha1.Node) (NodeKind, map[string]interface{}, erro
 			return 0, nil, fmt.Errorf("def: %w", err)
 		}
 		return NodeKindDef, obj, nil
+	case n.Patch != nil:
+		obj, err := projectPatchPayload(n.Patch)
+		if err != nil {
+			return 0, nil, fmt.Errorf("patch: %w", err)
+		}
+		return NodeKindPatch, obj, nil
 	default:
 		return 0, nil, fmt.Errorf("no payload set")
 	}
+}
+
+// projectPatchPayload merges a PatchSpec into a single manifest-shaped map:
+// the target apiVersion/kind/metadata identity plus the contributed body's
+// top-level fields. The result flows through the same GVK-resolution and CEL
+// extraction pipeline as a template, so a patch body is type-checked against
+// the target schema and its CEL references become dependencies. Body keys may
+// not override apiVersion/kind/metadata — those identify the target.
+func projectPatchPayload(p *expv1alpha1.PatchSpec) (map[string]interface{}, error) {
+	out := map[string]interface{}{}
+	if p.Body != nil {
+		body, err := unmarshalRaw(p.Body.Raw)
+		if err != nil {
+			return nil, fmt.Errorf("body: %w", err)
+		}
+		for k, v := range body {
+			out[k] = v
+		}
+	}
+	out["apiVersion"] = p.APIVersion
+	out["kind"] = p.Kind
+	metadata := map[string]interface{}{"name": p.Metadata.Name}
+	if p.Metadata.Namespace != "" {
+		metadata["namespace"] = p.Metadata.Namespace
+	}
+	out["metadata"] = metadata
+	return out, nil
 }
 
 func unmarshalRaw(raw []byte) (map[string]interface{}, error) {

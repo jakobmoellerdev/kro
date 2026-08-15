@@ -14,8 +14,11 @@
 package graph
 
 import (
+	"encoding/json"
+
 	expv1alpha1 "github.com/kubernetes-sigs/kro/api/v1alpha1"
 	"github.com/kubernetes-sigs/kro/pkg/graphengine/executor"
+	"github.com/kubernetes-sigs/kro/pkg/metadata"
 )
 
 // resourceKey is the identity tuple used to dedup ManagedResource
@@ -101,6 +104,89 @@ func unionManagedResources(previous []expv1alpha1.ManagedResource, applied []exp
 		}
 		seen[k] = struct{}{}
 		out = append(out, r)
+	}
+	return out
+}
+
+// contribKey is the identity tuple for a patch contribution. The field
+// manager alone is stable per patch node, but the target identity is included
+// so a patch whose target name changed releases the old target's fields.
+type contribKey struct {
+	FieldManager string
+	APIVersion   string
+	Kind         string
+	Namespace    string
+	Name         string
+	Subresource  string
+}
+
+func contribKeyOf(c executor.Contribution) contribKey {
+	return contribKey{
+		FieldManager: c.FieldManager,
+		APIVersion:   c.APIVersion,
+		Kind:         c.Kind,
+		Namespace:    c.Namespace,
+		Name:         c.Name,
+		Subresource:  c.Subresource,
+	}
+}
+
+// readContributions parses the persisted patch-contribution inventory off a
+// Graph's annotation. A missing or empty annotation is an empty inventory.
+func readContributions(g *expv1alpha1.Graph) ([]executor.Contribution, error) {
+	raw := g.GetAnnotations()[metadata.PatchContributionsAnnotation]
+	if raw == "" {
+		return nil, nil
+	}
+	var out []executor.Contribution
+	if err := json.Unmarshal([]byte(raw), &out); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// marshalContributions renders a contribution inventory as its annotation
+// value. An empty inventory renders as "" so the annotation can be dropped.
+func marshalContributions(contribs []executor.Contribution) (string, error) {
+	if len(contribs) == 0 {
+		return "", nil
+	}
+	raw, err := json.Marshal(contribs)
+	if err != nil {
+		return "", err
+	}
+	return string(raw), nil
+}
+
+// diffContributions returns the entries present in prior but absent from
+// current — the contributions to release because their patch node was removed
+// or its target identity changed.
+func diffContributions(prior, current []executor.Contribution) (released []executor.Contribution) {
+	cur := make(map[contribKey]struct{}, len(current))
+	for _, c := range current {
+		cur[contribKeyOf(c)] = struct{}{}
+	}
+	for _, p := range prior {
+		if _, ok := cur[contribKeyOf(p)]; !ok {
+			released = append(released, p)
+		}
+	}
+	return released
+}
+
+// unionContributions concatenates prior and current, deduping on identity.
+// Used when an Apply hit a soft or hard error — the diff isn't trustworthy,
+// so the persisted inventory widens to cover everything known.
+func unionContributions(prior, current []executor.Contribution) []executor.Contribution {
+	seen := make(map[contribKey]struct{}, len(prior)+len(current))
+	out := make([]executor.Contribution, 0, len(prior)+len(current))
+	for _, c := range append(append([]executor.Contribution(nil), prior...), current...) {
+		k := contribKeyOf(c)
+		if _, dup := seen[k]; dup {
+			continue
+		}
+		seen[k] = struct{}{}
+		out = append(out, c)
 	}
 	return out
 }

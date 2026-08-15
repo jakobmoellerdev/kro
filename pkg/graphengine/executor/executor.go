@@ -99,6 +99,25 @@ func (e *ResourceDeletingError) Is(target error) bool {
 type ApplyResult struct {
 	Applied    []expv1alpha1.ManagedResource
 	Unresolved []string // NodeIDs whose Resolve hit data-pending this cycle
+	// Contributions records one entry per patch node that applied this
+	// cycle. Patch nodes contribute fields to resources they do not own,
+	// so they are tracked separately from Applied — they are never pruned
+	// or deleted, only released (SSA field-manager removal) when the patch
+	// node is gone.
+	Contributions []Contribution
+}
+
+// Contribution identifies fields a patch node applied to a target resource
+// under a dedicated field manager. On prune the fields owned by FieldManager
+// are released (an empty SSA apply) so the target keeps every other field and
+// is never deleted.
+type Contribution struct {
+	APIVersion   string `json:"apiVersion"`
+	Kind         string `json:"kind"`
+	Namespace    string `json:"namespace,omitempty"`
+	Name         string `json:"name"`
+	Subresource  string `json:"subresource,omitempty"`
+	FieldManager string `json:"fieldManager"`
 }
 
 // Interface is the cluster-I/O surface used by the Graph reconciler.
@@ -133,4 +152,12 @@ type Interface interface {
 	// removed) can still be deleted cleanly: the record knows what was
 	// applied, regardless of what the current spec would re-derive.
 	Delete(ctx context.Context, resources []expv1alpha1.ManagedResource) error
+
+	// Release relinquishes the fields each Contribution's field manager
+	// owns on its target by server-side applying an object that carries
+	// only identity (apiVersion/kind/metadata.name[+namespace]) under that
+	// manager. SSA drops every field the manager previously owned while
+	// leaving the object and other managers' fields intact. A target that
+	// no longer exists (NotFound) is tolerated. Safe to call repeatedly.
+	Release(ctx context.Context, contributions []Contribution) error
 }

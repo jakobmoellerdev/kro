@@ -16,6 +16,8 @@ package executor
 
 import (
 	"context"
+	"crypto/sha1"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"strconv"
@@ -277,6 +279,23 @@ func (s *Simple) Apply(ctx context.Context, rt *runtime.Runtime, w watchrouter.W
 				n.SetObserved(observed, desired)
 			}
 			publishScope(rt, n, n.Observed())
+		case compiler.NodeKindPatch:
+			contribution, err := s.applyPatch(ctx, rt, w, n, desired)
+			if err != nil {
+				// A dynamic-GVK patch whose target CRD isn't installed yet,
+				// an absent target, or a terminating target are all soft:
+				// record Unresolved so nothing is pruned and requeue.
+				if errors.Is(err, errSchemaNotReady) || errors.Is(err, ErrNotReady) || isSoftRuntimeErr(err) {
+					result.Unresolved = append(result.Unresolved, n.ID())
+					recordSoft(fmt.Errorf("apply %q (patch): %w", n.ID(), err))
+					continue
+				}
+				return result, fmt.Errorf("apply %q (patch): %w", n.ID(), err)
+			}
+			result.Contributions = append(result.Contributions, contribution)
+			// A patch publishes no value into scope; record observed so an
+			// optional readyWhen can still evaluate against the node.
+			n.SetObserved(desired, desired)
 		default:
 			return result, fmt.Errorf("apply %q: unknown kind %v", n.ID(), n.Kind())
 		}
@@ -489,7 +508,7 @@ func (s *Simple) applyTemplate(ctx context.Context, rt *runtime.Runtime, w watch
 			continue
 		}
 
-		if err := s.ssaApply(ctx, obj); err != nil {
+		if err := s.ssaApply(ctx, obj, FieldManager, true); err != nil {
 			if !isCollection {
 				// Scalar Template: an SSA failure is a hard error, unchanged.
 				return applied, err
@@ -824,11 +843,123 @@ func (s *Simple) defaultNamespace(rt *runtime.Runtime, namespaced bool, obj *uns
 	}
 }
 
-// ssaApply server-side applies obj with the graph-engine field manager. We
-// force ownership so re-applies after a hand-edit converge back.
-func (s *Simple) ssaApply(ctx context.Context, obj *unstructured.Unstructured) error {
+// ssaApply server-side applies obj with the given field manager. force takes
+// ownership of fields already owned by other managers so a template re-apply
+// after a hand-edit converges back; a patch contributes without force so it
+// only claims the fields it sets.
+func (s *Simple) ssaApply(ctx context.Context, obj *unstructured.Unstructured, fieldManager string, force bool) error {
 	if s.LabelInjector != nil {
 		s.LabelInjector(obj)
 	}
-	return s.Client.Patch(ctx, obj, client.Apply, client.FieldOwner(FieldManager), client.ForceOwnership)
+	opts := []client.PatchOption{client.FieldOwner(fieldManager)}
+	if force {
+		opts = append(opts, client.ForceOwnership)
+	}
+	return s.Client.Patch(ctx, obj, client.Apply, opts...)
+}
+
+// applyPatch contributes the fields a patch node produced to a target it does
+// not own. The target must already exist: an absent target is a soft requeue
+// (ErrNotReady) so dependents gate and the reconcile retries once the target
+// appears. The contribution is server-side applied under a per-node field
+// manager without ForceOwnership, so it claims only the fields it sets; a
+// status-subresource patch is routed through the status endpoint. Returns the
+// recorded Contribution so the reconciler can release it on prune.
+func (s *Simple) applyPatch(ctx context.Context, rt *runtime.Runtime, w watchrouter.Watcher, n *runtime.Node, desired []*unstructured.Unstructured) (Contribution, error) {
+	// forEach is rejected on patch nodes at compile time, so Resolve produced
+	// exactly one object.
+	if len(desired) != 1 {
+		return Contribution{}, fmt.Errorf("patch node resolved to %d objects, want 1", len(desired))
+	}
+	obj := desired[0]
+
+	gvr, namespaced, err := s.mappingFor(n, obj)
+	if err != nil {
+		return Contribution{}, err
+	}
+	s.defaultNamespace(rt, namespaced, obj)
+
+	// Register the watch before the read so a change to the target (including
+	// its creation) re-enqueues the Graph.
+	if err := s.watchObject(w, n.ID(), gvr, obj); err != nil {
+		return Contribution{}, fmt.Errorf("register watch: %w", err)
+	}
+
+	current, err := s.getLive(ctx, obj)
+	if err != nil {
+		return Contribution{}, err
+	}
+	if current == nil {
+		return Contribution{}, fmt.Errorf("patch target %s %q not found: %w",
+			obj.GetKind(), client.ObjectKeyFromObject(obj), ErrNotReady)
+	}
+	if current.GetDeletionTimestamp() != nil {
+		return Contribution{}, &ResourceDeletingError{NodeID: n.ID(), Namespace: obj.GetNamespace(), Name: obj.GetName()}
+	}
+
+	fieldManager := patchFieldManager(rt.Graph().GetUID(), n.ID())
+	subresource := n.Subresource()
+	if err := s.contributeApply(ctx, obj, fieldManager, subresource); err != nil {
+		return Contribution{}, err
+	}
+
+	gvk := obj.GroupVersionKind()
+	return Contribution{
+		APIVersion:   gvk.GroupVersion().String(),
+		Kind:         gvk.Kind,
+		Namespace:    obj.GetNamespace(),
+		Name:         obj.GetName(),
+		Subresource:  subresource,
+		FieldManager: fieldManager,
+	}, nil
+}
+
+// contributeApply server-side applies obj under fieldManager without taking
+// ownership of the whole object (no ForceOwnership), so it claims only the
+// fields it sets. A status-subresource patch is routed through the status
+// endpoint; everything else applies to the main resource via ssaApply.
+func (s *Simple) contributeApply(ctx context.Context, obj *unstructured.Unstructured, fieldManager, subresource string) error {
+	if subresource == "status" {
+		return s.Client.Status().Patch(ctx, obj, client.Apply, client.FieldOwner(fieldManager))
+	}
+	return s.ssaApply(ctx, obj, fieldManager, false)
+}
+
+// Release relinquishes the fields each contribution's field manager owns by
+// server-side applying an identity-only object under that manager. SSA drops
+// every field the manager previously owned; the target object and other
+// managers' fields are left intact. A missing target is tolerated.
+func (s *Simple) Release(ctx context.Context, contributions []Contribution) error {
+	for _, c := range contributions {
+		obj := &unstructured.Unstructured{}
+		obj.SetAPIVersion(c.APIVersion)
+		obj.SetKind(c.Kind)
+		obj.SetNamespace(c.Namespace)
+		obj.SetName(c.Name)
+
+		var err error
+		if c.Subresource == "status" {
+			err = s.Client.Status().Patch(ctx, obj, client.Apply, client.FieldOwner(c.FieldManager))
+		} else {
+			err = s.Client.Patch(ctx, obj, client.Apply, client.FieldOwner(c.FieldManager))
+		}
+		if err != nil {
+			if apierrors.IsNotFound(err) {
+				continue
+			}
+			return fmt.Errorf("release %s/%s %s (manager %q): %w",
+				c.APIVersion, c.Kind, refName(expv1alpha1.ManagedResource{Namespace: c.Namespace, Name: c.Name}), c.FieldManager, err)
+		}
+	}
+	return nil
+}
+
+// patchFieldManager derives a stable, unique field-manager identity for a
+// patch node: the first 12 hex characters of sha1(parentUID + "/" + nodeID),
+// prefixed so it reads as a kro-owned patch manager and stays under the
+// 128-character SSA limit. Stability across reconciles is what lets
+// release-on-prune drop exactly the fields a given patch node contributed.
+func patchFieldManager(parentUID types.UID, nodeID string) string {
+	sum := sha1.Sum([]byte(string(parentUID) + "/" + nodeID))
+	return "kro-graphengine.patch." + hex.EncodeToString(sum[:])[:12]
 }

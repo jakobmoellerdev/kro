@@ -98,6 +98,8 @@ func validateFrameNodes(nodes []expv1alpha1.Node) error {
 // templates — they read existing state. graph (subgraph) nodes
 // don't render or read; the per-node modifiers have no defined semantics on
 // them yet, so they're rejected explicitly rather than silently ignored.
+// patch nodes contribute to a single existing target, so forEach is rejected
+// and the target must be nameable.
 func validateKindCompatibility(n *expv1alpha1.Node) error {
 	if n.Graph != nil {
 		switch {
@@ -107,6 +109,17 @@ func validateKindCompatibility(n *expv1alpha1.Node) error {
 			return fmt.Errorf("includeWhen is not supported on graph nodes")
 		case len(n.ReadyWhen) > 0:
 			return fmt.Errorf("readyWhen is not supported on graph nodes")
+		}
+		return nil
+	}
+	if n.Patch != nil {
+		// A patch contributes to a single existing target, so it does not
+		// expand into a collection. The target must be nameable.
+		if len(n.ForEach) > 0 {
+			return fmt.Errorf("forEach is not supported on patch nodes")
+		}
+		if n.Patch.Metadata.Name == "" {
+			return fmt.Errorf("patch target requires metadata.name")
 		}
 		return nil
 	}
@@ -135,7 +148,7 @@ func validateNodeID(id string) error {
 }
 
 // validateNodeShape enforces the discriminated-union contract: exactly one
-// of template/ref/def/graph must be set.
+// of template/ref/def/graph/patch must be set.
 func validateNodeShape(n *expv1alpha1.Node) error {
 	set := 0
 	if n.Template != nil {
@@ -150,8 +163,11 @@ func validateNodeShape(n *expv1alpha1.Node) error {
 	if n.Graph != nil {
 		set++
 	}
+	if n.Patch != nil {
+		set++
+	}
 	if set != 1 {
-		return fmt.Errorf("exactly one of template/ref/def/graph must be set (got %d)", set)
+		return fmt.Errorf("exactly one of template/ref/def/graph/patch must be set (got %d)", set)
 	}
 	return nil
 }

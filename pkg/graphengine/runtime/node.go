@@ -83,6 +83,10 @@ func (n *Node) Namespaced() bool { return n.spec.Namespaced }
 // time rather than read from the compiled spec.
 func (n *Node) DynamicGVK() bool { return n.spec.DynamicGVK }
 
+// Subresource returns the target subresource a patch node contributes to
+// ("status" or ""). Empty for every other kind.
+func (n *Node) Subresource() string { return n.spec.Subresource }
+
 // IsCollection reports whether the node expands into a collection,
 // delegating to compiler.Node.IsCollection.
 func (n *Node) IsCollection() bool { return n.spec.IsCollection() }
