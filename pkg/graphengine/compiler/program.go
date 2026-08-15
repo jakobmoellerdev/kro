@@ -28,13 +28,12 @@ import (
 // collection iteration.
 const EachVarName = "each"
 
-// NodeKind discriminates the four Graph node types.
+// NodeKind discriminates the Graph node types.
 type NodeKind int
 
 const (
 	NodeKindTemplate NodeKind = iota
 	NodeKindRef
-	NodeKindWatch
 	NodeKindDef
 	NodeKindGraph
 )
@@ -46,8 +45,6 @@ func (k NodeKind) String() string {
 		return "template"
 	case NodeKindRef:
 		return "ref"
-	case NodeKindWatch:
-		return "watch"
 	case NodeKindDef:
 		return "def"
 	case NodeKindGraph:
@@ -75,7 +72,7 @@ type Node struct {
 	// Kind discriminates the node type.
 	Kind NodeKind
 
-	// GVR is the target GroupVersionResource. Set for Template/Patch/Ref/Watch
+	// GVR is the target GroupVersionResource. Set for Template/Patch/Ref
 	// with a literal apiVersion+kind; zero-valued for Def and for dynamic-GVK
 	// templates (the GVK isn't known until reconcile-time evaluation).
 	GVR schema.GroupVersionResource
@@ -95,7 +92,6 @@ type Node struct {
 	// Object is the parsed payload as an unstructured object:
 	//   Template/Patch: the user-authored manifest
 	//   Ref:            the ExternalRef projected as {apiVersion, kind, metadata}
-	//   Watch:          the WatchSpec projected as {apiVersion, kind, namespace?, selector}
 	//   Def:            the raw def map
 	Object *unstructured.Unstructured
 
@@ -116,8 +112,7 @@ type Node struct {
 	// payload carries metadata.selector): the node reads a read-only
 	// collection of external objects by label selector. It makes IsCollection
 	// report true so the schema wraps as a list and publishScope emits a
-	// []any, without reusing NodeKindWatch (whose map[string]string selector
-	// cannot express matchExpressions).
+	// []any. The selector externalRef supports matchExpressions.
 	Collection bool
 
 	// IncludeWhen are compiled CEL conditions that all must evaluate true
@@ -140,10 +135,10 @@ type Node struct {
 }
 
 // IsCollection reports whether this node expands into multiple instances or
-// otherwise publishes a list into scope. True for forEach templates, Watch
-// nodes, and selector externalRefs (Collection).
+// otherwise publishes a list into scope. True for forEach templates and
+// selector externalRefs (Collection).
 func (n *Node) IsCollection() bool {
-	return len(n.ForEach) > 0 || n.Kind == NodeKindWatch || n.Collection
+	return len(n.ForEach) > 0 || n.Collection
 }
 
 // Program is the compiled IR for a v1alpha1.Graph. It carries the dependency
@@ -163,7 +158,7 @@ type Program struct {
 
 	// RequiredGroupKinds is the deduplicated set of Kubernetes GroupKinds the
 	// Graph statically references. Templates with literal apiVersion+kind
-	// contribute; Ref and Watch nodes contribute their target GroupKind;
+	// contribute; Ref nodes contribute their target GroupKind;
 	// Def nodes contribute nothing. The SchemaWatcher uses this to know
 	// which Graphs must be re-enqueued when a particular CRD changes.
 	//

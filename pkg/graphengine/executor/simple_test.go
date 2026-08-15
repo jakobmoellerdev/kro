@@ -215,17 +215,6 @@ func TestSimple_Apply(t *testing.T) {
 			wantErr: ErrNotReady.Error(),
 		},
 		{
-			name: "watch node returns ErrUnsupported",
-			graph: generator.NewGraph("g",
-				generator.WithDef("naming", map[string]any{"app": "x"}),
-				generator.WithWatch("pods", &expv1alpha1.WatchSpec{
-					APIVersion: "v1", Kind: "Pod",
-					Selector: map[string]string{"app": "${naming.app}"},
-				}),
-			),
-			wantErr: ErrUnsupported.Error(),
-		},
-		{
 			name: "resolve failure during apply surfaces as a wrapped error",
 			graph: generator.NewGraph("g",
 				generator.WithNamespace("default"),

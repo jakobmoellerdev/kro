@@ -66,13 +66,6 @@ func WithRef(id string, ref *expv1alpha1.ExternalRef) GraphOption {
 	})
 }
 
-// WithWatch appends a watch node from a WatchSpec.
-func WithWatch(id string, watch *expv1alpha1.WatchSpec) GraphOption {
-	return appendNode(func() expv1alpha1.Node {
-		return expv1alpha1.Node{ID: id, Watch: watch}
-	})
-}
-
 // WithDef appends a def node. The value is JSON-marshalled and embedded.
 func WithDef(id string, def map[string]any) GraphOption {
 	return appendNode(func() expv1alpha1.Node {

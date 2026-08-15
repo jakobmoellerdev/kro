@@ -104,18 +104,6 @@ func TestCompilationContext_BuildNode(t *testing.T) {
 			},
 		},
 		{
-			name: "watch node is a collection",
-			node: &expv1alpha1.Node{ID: "pods", Watch: &expv1alpha1.WatchSpec{
-				APIVersion: "v1", Kind: "Pod",
-				Selector: map[string]string{"app": "x"},
-			}},
-			check: func(t *testing.T, n *Node, sch *spec.Schema) {
-				assert.Equal(t, NodeKindWatch, n.Kind)
-				assert.True(t, n.IsCollection(), "watch nodes expand into a list")
-				assert.Equal(t, "pods", n.GVR.Resource)
-			},
-		},
-		{
 			name: "dynamic apiVersion flags the node and skips GVR/schema",
 			node: &expv1alpha1.Node{ID: "dyn", Template: rawExtensionFromObject(map[string]any{
 				"apiVersion": "${cfg.group}", "kind": "Widget",

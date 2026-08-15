@@ -28,7 +28,6 @@ func TestNodeKindString(t *testing.T) {
 	}{
 		{NodeKindTemplate, "template"},
 		{NodeKindRef, "ref"},
-		{NodeKindWatch, "watch"},
 		{NodeKindDef, "def"},
 		{NodeKind(99), "unknown"},
 	}
@@ -49,7 +48,6 @@ func TestNodeIsCollection(t *testing.T) {
 	}{
 		{name: "template without forEach is single", node: Node{Kind: NodeKindTemplate}, want: false},
 		{name: "template with forEach is a collection", node: Node{Kind: NodeKindTemplate, ForEach: []ForEachDimension{{Name: "r"}}}, want: true},
-		{name: "watch is always a collection", node: Node{Kind: NodeKindWatch}, want: true},
 		{name: "def without forEach is single", node: Node{Kind: NodeKindDef}, want: false},
 	}
 	for _, tc := range cases {
