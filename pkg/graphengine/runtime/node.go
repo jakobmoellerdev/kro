@@ -22,8 +22,8 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/schema"
 
 	krocel "github.com/kubernetes-sigs/kro/pkg/cel"
+	"github.com/kubernetes-sigs/kro/pkg/graph/variable"
 	"github.com/kubernetes-sigs/kro/pkg/graphengine/compiler"
-	"github.com/kubernetes-sigs/kro/pkg/graphengine/compiler/variable"
 	"github.com/kubernetes-sigs/kro/pkg/graphengine/runtime/resolver"
 )
 
