@@ -250,7 +250,7 @@ var _ = Describe("Dependency Readiness", func() {
 				Namespace: namespace,
 			}, &appsv1.Deployment{})
 			g.Expect(err).To(MatchError(errors.IsNotFound, "deployment should not be created yet"))
-		}, 10*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
+		}, 7*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 		// Verify instance state is IN_PROGRESS
 		Eventually(func(g Gomega, ctx SpecContext) {
@@ -291,7 +291,7 @@ var _ = Describe("Dependency Readiness", func() {
 				Namespace: namespace,
 			}, &appsv1.Deployment{})
 			g.Expect(err).To(MatchError(errors.IsNotFound, "deployment should still not be created"))
-		}, 10*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
+		}, 7*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 		// Update instance spec to set ConfigMap B to ready
 		Eventually(func(g Gomega, ctx SpecContext) {
@@ -479,7 +479,7 @@ var _ = Describe("Dependency Readiness", func() {
 				Namespace: namespace,
 			}, &batchv1.Job{})
 			g.Expect(err).To(MatchError(errors.IsNotFound, "job2 should not be created while job1 is running"))
-		}, 10*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
+		}, 7*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 		now := metav1.Now()
 		job1.Status.Conditions = append(job1.Status.Conditions,
