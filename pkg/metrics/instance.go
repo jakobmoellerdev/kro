@@ -70,30 +70,6 @@ var (
 		[]string{"gvr"},
 	)
 
-	InstanceGraphResolutionSuccessTotal = prometheus.NewCounterVec(
-		prometheus.CounterOpts{
-			Name: "instance_graph_resolution_success_total",
-			Help: "Total number of successful graph resolutions during instance reconciliation",
-		},
-		[]string{"gvr"},
-	)
-
-	InstanceGraphResolutionFailuresTotal = prometheus.NewCounterVec(
-		prometheus.CounterOpts{
-			Name: "instance_graph_resolution_failures_total",
-			Help: "Total number of graph resolution failures during instance reconciliation",
-		},
-		[]string{"gvr", "reason"},
-	)
-
-	InstanceGraphResolutionPendingTotal = prometheus.NewCounterVec(
-		prometheus.CounterOpts{
-			Name: "instance_graph_resolution_pending_total",
-			Help: "Total number of graph resolutions deferred due to pending revision",
-		},
-		[]string{"gvr"},
-	)
-
 	// InstanceConditionCurrentStatusSeconds is computed at scrape time by a
 	// Collector so it stays accurate for non-PromQL consumers (CloudWatch,
 	// Datadog) even while the controller is idle. The cache rebuilds from
