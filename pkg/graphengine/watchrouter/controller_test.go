@@ -26,6 +26,8 @@ import (
 	"k8s.io/client-go/tools/cache"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/event"
+
+	watch "github.com/kubernetes-sigs/kro/pkg/watch"
 )
 
 // newTestDC builds a Router whose Manager uses a fake
@@ -38,7 +40,7 @@ func newTestDC(t *testing.T) (*Router, *fakeInformerRegistry) {
 		log:    logr.Discard(),
 		events: make(chan event.GenericEvent, 16),
 	}
-	dc.watches = NewManager(nil, 0, dc.routeEvent, logr.Discard())
+	dc.watches = watch.NewManager(nil, 0, dc.routeEvent, logr.Discard())
 	dc.watches.SyncTimeout = 500 * time.Millisecond
 	dc.watches.SetInformerFactory(func(gvr schema.GroupVersionResource) cache.SharedIndexInformer {
 		return reg.create(gvr)

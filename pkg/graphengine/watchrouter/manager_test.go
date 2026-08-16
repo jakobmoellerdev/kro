@@ -26,6 +26,8 @@ import (
 	"github.com/stretchr/testify/require"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/client-go/tools/cache"
+
+	"github.com/kubernetes-sigs/kro/pkg/watch"
 )
 
 var (
@@ -36,13 +38,13 @@ var (
 // newTestManager returns a manager whose createInformer hands out a
 // pre-baked fake. The map of informers is exposed so tests can drive
 // events. SyncTimeout is short so failing syncs don't stall the suite.
-func newTestManager(t *testing.T, onEvent EventHandler) (*Manager, *fakeInformerRegistry) {
+func newTestManager(t *testing.T, onEvent watch.EventHandler) (*watch.Manager, *fakeInformerRegistry) {
 	t.Helper()
 	if onEvent == nil {
-		onEvent = func(Event) {}
+		onEvent = func(watch.Event) {}
 	}
 	reg := &fakeInformerRegistry{informers: make(map[schema.GroupVersionResource]*fakeInformer)}
-	wm := NewManager(nil, 0, onEvent, logr.Discard())
+	wm := watch.NewManager(nil, 0, onEvent, logr.Discard())
 	wm.SyncTimeout = 500 * time.Millisecond
 	wm.SetInformerFactory(reg.create)
 	t.Cleanup(wm.Shutdown)
@@ -75,11 +77,11 @@ func (r *fakeInformerRegistry) get(gvr schema.GroupVersionResource) *fakeInforme
 func TestManagerLifecycle(t *testing.T) {
 	tests := []struct {
 		name string
-		fn   func(t *testing.T, wm *Manager, reg *fakeInformerRegistry)
+		fn   func(t *testing.T, wm *watch.Manager, reg *fakeInformerRegistry)
 	}{
 		{
 			name: "ensure-once-and-release-stops",
-			fn: func(t *testing.T, wm *Manager, reg *fakeInformerRegistry) {
+			fn: func(t *testing.T, wm *watch.Manager, reg *fakeInformerRegistry) {
 				require.NoError(t, wm.EnsureWatch(gvrA, "owner-1"))
 				inf := reg.get(gvrA)
 				require.NotNil(t, inf)
@@ -91,7 +93,7 @@ func TestManagerLifecycle(t *testing.T) {
 		},
 		{
 			name: "two-owners-only-stops-on-last-release",
-			fn: func(t *testing.T, wm *Manager, reg *fakeInformerRegistry) {
+			fn: func(t *testing.T, wm *watch.Manager, reg *fakeInformerRegistry) {
 				require.NoError(t, wm.EnsureWatch(gvrA, "owner-1"))
 				require.NoError(t, wm.EnsureWatch(gvrA, "owner-2"))
 				assert.Equal(t, 1, wm.ActiveWatchCount())
@@ -105,7 +107,7 @@ func TestManagerLifecycle(t *testing.T) {
 		},
 		{
 			name: "duplicate-ensure-is-idempotent",
-			fn: func(t *testing.T, wm *Manager, _ *fakeInformerRegistry) {
+			fn: func(t *testing.T, wm *watch.Manager, _ *fakeInformerRegistry) {
 				require.NoError(t, wm.EnsureWatch(gvrA, "owner-1"))
 				require.NoError(t, wm.EnsureWatch(gvrA, "owner-1"))
 				require.NoError(t, wm.EnsureWatch(gvrA, "owner-1"))
@@ -116,14 +118,14 @@ func TestManagerLifecycle(t *testing.T) {
 		},
 		{
 			name: "release-unknown-owner-is-noop",
-			fn: func(t *testing.T, wm *Manager, _ *fakeInformerRegistry) {
+			fn: func(t *testing.T, wm *watch.Manager, _ *fakeInformerRegistry) {
 				wm.ReleaseWatch(gvrA, "ghost")
 				assert.Equal(t, 0, wm.ActiveWatchCount())
 			},
 		},
 		{
 			name: "shutdown-stops-all",
-			fn: func(t *testing.T, wm *Manager, reg *fakeInformerRegistry) {
+			fn: func(t *testing.T, wm *watch.Manager, reg *fakeInformerRegistry) {
 				require.NoError(t, wm.EnsureWatch(gvrA, "x"))
 				require.NoError(t, wm.EnsureWatch(gvrB, "x"))
 				assert.Equal(t, 2, wm.ActiveWatchCount())
@@ -150,15 +152,15 @@ func TestManagerEventRouting(t *testing.T) {
 	tests := []struct {
 		name string
 		fire func(inf *fakeInformer)
-		want Event
+		want watch.Event
 	}{
 		{
 			name: "add",
 			fire: func(inf *fakeInformer) {
 				inf.fireAdd(newFakeObj("ns1", "cm-1", map[string]string{"app": "x"}))
 			},
-			want: Event{
-				Type: EventAdd, GVR: gvrA, Name: "cm-1", Namespace: "ns1",
+			want: watch.Event{
+				Type: watch.EventAdd, GVR: gvrA, Name: "cm-1", Namespace: "ns1",
 				Labels: map[string]string{"app": "x"},
 			},
 		},
@@ -170,8 +172,8 @@ func TestManagerEventRouting(t *testing.T) {
 					newFakeObj("ns1", "cm-1", map[string]string{"app": "new"}),
 				)
 			},
-			want: Event{
-				Type: EventUpdate, GVR: gvrA, Name: "cm-1", Namespace: "ns1",
+			want: watch.Event{
+				Type: watch.EventUpdate, GVR: gvrA, Name: "cm-1", Namespace: "ns1",
 				Labels:    map[string]string{"app": "new"},
 				OldLabels: map[string]string{"app": "old"},
 			},
@@ -181,7 +183,7 @@ func TestManagerEventRouting(t *testing.T) {
 			fire: func(inf *fakeInformer) {
 				inf.fireDelete(newFakeObj("ns1", "cm-1", nil))
 			},
-			want: Event{Type: EventDelete, GVR: gvrA, Name: "cm-1", Namespace: "ns1"},
+			want: watch.Event{Type: watch.EventDelete, GVR: gvrA, Name: "cm-1", Namespace: "ns1"},
 		},
 		{
 			name: "delete-unwraps-tombstone",
@@ -191,7 +193,7 @@ func TestManagerEventRouting(t *testing.T) {
 					Obj: newFakeObj("ns1", "cm-1", nil),
 				})
 			},
-			want: Event{Type: EventDelete, GVR: gvrA, Name: "cm-1", Namespace: "ns1"},
+			want: watch.Event{Type: watch.EventDelete, GVR: gvrA, Name: "cm-1", Namespace: "ns1"},
 		},
 	}
 
@@ -199,9 +201,9 @@ func TestManagerEventRouting(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			var (
 				mu  sync.Mutex
-				got []Event
+				got []watch.Event
 			)
-			handler := func(e Event) {
+			handler := func(e watch.Event) {
 				mu.Lock()
 				defer mu.Unlock()
 				got = append(got, e)
@@ -222,7 +224,7 @@ func TestManagerEventRouting(t *testing.T) {
 // informer never reports HasSynced. The watch is torn down on timeout so
 // active count stays zero — no zombie watches.
 func TestManagerSyncTimeout(t *testing.T) {
-	wm := NewManager(nil, 0, func(Event) {}, logr.Discard())
+	wm := watch.NewManager(nil, 0, func(watch.Event) {}, logr.Discard())
 	wm.SyncTimeout = 50 * time.Millisecond
 
 	never := &neverSyncInformer{}

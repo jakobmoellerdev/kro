@@ -24,6 +24,8 @@ import (
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+
+	"github.com/kubernetes-sigs/kro/pkg/watch"
 )
 
 // enqueueRecorder captures the keys the coordinator asks to be requeued.
@@ -141,7 +143,7 @@ func TestCoordinatorWatchAndDone(t *testing.T) {
 		require.NoError(t, w2.Watch(scalarReq("n1", gvrA, "cm-A", "ns")))
 		w2.Done(true)
 
-		c.RouteEvent(Event{Type: EventUpdate, GVR: gvrA, Name: "cm-A", Namespace: "ns"})
+		c.RouteEvent(watch.Event{Type: watch.EventUpdate, GVR: gvrA, Name: "cm-A", Namespace: "ns"})
 		assert.ElementsMatch(t, []client.ObjectKey{graphA}, rec.snapshot(),
 			"retarget round-trip should leave A in the routing index")
 	})
@@ -162,7 +164,7 @@ func TestCoordinatorWatchAndDone(t *testing.T) {
 		assert.Equal(t, 1, s)
 
 		// Routing on the old name should match nothing now.
-		c.RouteEvent(Event{Type: EventUpdate, GVR: gvrA, Name: "cm-1", Namespace: "ns"})
+		c.RouteEvent(watch.Event{Type: watch.EventUpdate, GVR: gvrA, Name: "cm-1", Namespace: "ns"})
 	})
 }
 
@@ -176,7 +178,7 @@ func TestCoordinatorRouteScalar(t *testing.T) {
 	tests := []struct {
 		name  string
 		setup func(c *Coordinator)
-		event Event
+		event watch.Event
 		want  []client.ObjectKey
 	}{
 		{
@@ -186,7 +188,7 @@ func TestCoordinatorRouteScalar(t *testing.T) {
 				_ = w.Watch(scalarReq("n", gvrA, "cm-1", "ns"))
 				w.Done(true)
 			},
-			event: Event{Type: EventUpdate, GVR: gvrA, Name: "cm-1", Namespace: "ns"},
+			event: watch.Event{Type: watch.EventUpdate, GVR: gvrA, Name: "cm-1", Namespace: "ns"},
 			want:  []client.ObjectKey{graphA},
 		},
 		{
@@ -199,7 +201,7 @@ func TestCoordinatorRouteScalar(t *testing.T) {
 				_ = wb.Watch(scalarReq("nb", gvrA, "cm-1", "ns"))
 				wb.Done(true)
 			},
-			event: Event{Type: EventUpdate, GVR: gvrA, Name: "cm-1", Namespace: "ns"},
+			event: watch.Event{Type: watch.EventUpdate, GVR: gvrA, Name: "cm-1", Namespace: "ns"},
 			want:  []client.ObjectKey{graphA, graphB},
 		},
 		{
@@ -209,7 +211,7 @@ func TestCoordinatorRouteScalar(t *testing.T) {
 				_ = w.Watch(scalarReq("n", gvrA, "cm-1", "ns"))
 				w.Done(true)
 			},
-			event: Event{Type: EventUpdate, GVR: gvrA, Name: "other", Namespace: "ns"},
+			event: watch.Event{Type: watch.EventUpdate, GVR: gvrA, Name: "other", Namespace: "ns"},
 			want:  nil,
 		},
 		{
@@ -219,7 +221,7 @@ func TestCoordinatorRouteScalar(t *testing.T) {
 				_ = w.Watch(scalarReq("n", gvrA, "cm-1", "ns"))
 				w.Done(true)
 			},
-			event: Event{Type: EventUpdate, GVR: gvrA, Name: "cm-1", Namespace: "other"},
+			event: watch.Event{Type: watch.EventUpdate, GVR: gvrA, Name: "cm-1", Namespace: "other"},
 			want:  nil,
 		},
 		{
@@ -229,7 +231,7 @@ func TestCoordinatorRouteScalar(t *testing.T) {
 				_ = w.Watch(scalarReq("n", gvrA, "cm-1", "ns"))
 				w.Done(true)
 			},
-			event: Event{Type: EventUpdate, GVR: gvrB, Name: "cm-1", Namespace: "ns"},
+			event: watch.Event{Type: watch.EventUpdate, GVR: gvrB, Name: "cm-1", Namespace: "ns"},
 			want:  nil,
 		},
 	}
@@ -259,7 +261,7 @@ func TestCoordinatorRouteCollection(t *testing.T) {
 	tests := []struct {
 		name  string
 		setup func(c *Coordinator)
-		event Event
+		event watch.Event
 		want  []client.ObjectKey
 	}{
 		{
@@ -269,8 +271,8 @@ func TestCoordinatorRouteCollection(t *testing.T) {
 				_ = w.Watch(collectionReq("n", gvrA, "ns", matchApp()))
 				w.Done(true)
 			},
-			event: Event{
-				Type: EventUpdate, GVR: gvrA, Name: "p-1", Namespace: "ns",
+			event: watch.Event{
+				Type: watch.EventUpdate, GVR: gvrA, Name: "p-1", Namespace: "ns",
 				Labels: map[string]string{"app": "svc"},
 			},
 			want: []client.ObjectKey{graphA},
@@ -282,8 +284,8 @@ func TestCoordinatorRouteCollection(t *testing.T) {
 				_ = w.Watch(collectionReq("n", gvrA, "ns", matchApp()))
 				w.Done(true)
 			},
-			event: Event{
-				Type: EventUpdate, GVR: gvrA, Name: "p-1", Namespace: "ns",
+			event: watch.Event{
+				Type: watch.EventUpdate, GVR: gvrA, Name: "p-1", Namespace: "ns",
 				Labels:    map[string]string{"app": "other"},
 				OldLabels: map[string]string{"app": "svc"},
 			},
@@ -296,8 +298,8 @@ func TestCoordinatorRouteCollection(t *testing.T) {
 				_ = w.Watch(collectionReq("n", gvrA, "ns", matchApp()))
 				w.Done(true)
 			},
-			event: Event{
-				Type: EventUpdate, GVR: gvrA, Name: "p-1", Namespace: "ns",
+			event: watch.Event{
+				Type: watch.EventUpdate, GVR: gvrA, Name: "p-1", Namespace: "ns",
 				Labels: map[string]string{"app": "other"},
 			},
 			want: nil,
@@ -309,8 +311,8 @@ func TestCoordinatorRouteCollection(t *testing.T) {
 				_ = w.Watch(collectionReq("n", gvrA, "ns", matchApp()))
 				w.Done(true)
 			},
-			event: Event{
-				Type: EventUpdate, GVR: gvrA, Name: "p-1", Namespace: "other",
+			event: watch.Event{
+				Type: watch.EventUpdate, GVR: gvrA, Name: "p-1", Namespace: "other",
 				Labels: map[string]string{"app": "svc"},
 			},
 			want: nil,
@@ -322,8 +324,8 @@ func TestCoordinatorRouteCollection(t *testing.T) {
 				_ = w.Watch(collectionReq("n", gvrA, "", matchApp()))
 				w.Done(true)
 			},
-			event: Event{
-				Type: EventUpdate, GVR: gvrA, Name: "p-1", Namespace: "anywhere",
+			event: watch.Event{
+				Type: watch.EventUpdate, GVR: gvrA, Name: "p-1", Namespace: "anywhere",
 				Labels: map[string]string{"app": "svc"},
 			},
 			want: []client.ObjectKey{graphA},
@@ -361,7 +363,7 @@ func TestCoordinatorRemoveGraph(t *testing.T) {
 	assert.Equal(t, 1, scalar, "graphA's entries gone, graphB's stays")
 
 	// Event on graphA's old resource should only enqueue graphB now.
-	c.RouteEvent(Event{Type: EventUpdate, GVR: gvrA, Name: "cm-1", Namespace: "ns"})
+	c.RouteEvent(watch.Event{Type: watch.EventUpdate, GVR: gvrA, Name: "cm-1", Namespace: "ns"})
 	assert.ElementsMatch(t, []client.ObjectKey{graphB}, rec.snapshot())
 
 	// Idempotent for unknown.
