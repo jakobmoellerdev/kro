@@ -58,6 +58,12 @@ endif
 HELM_DIR = ./helm
 WHAT ?= unit
 
+# GINKGO_PROCS controls integration-test parallelism. The core suite now shares
+# a single envtest control plane across all parallel processes (see
+# test/integration/suites/core/setup_test.go), so raising this no longer starts
+# additional apiserver/etcd processes.
+GINKGO_PROCS ?= 4
+
 # Get the currently used golang install path (in GOPATH/bin, unless GOBIN is set)
 ifeq (,$(shell go env GOBIN))
 GOBIN=$(shell go env GOPATH)/bin
@@ -134,7 +140,9 @@ vet: ## Run go vet against code.
 test: manifests generate fmt vet envtest ## Run tests. Use WHAT=unit or WHAT=integration, pass extra args after --
 ifeq ($(WHAT),integration)
 	KUBEBUILDER_ASSETS="$(shell $(ENVTEST) use $(ENVTEST_VERSION) --bin-dir $(LOCALBIN) -p path)" \
-		go tool ginkgo -p -v \
+		go tool ginkgo --procs=$(GINKGO_PROCS) -v \
+		--poll-progress-after=60s --poll-progress-interval=30s \
+		--timeout=30m \
 		--cover \
 		--coverprofile=integration-cover.out \
 		-coverpkg=github.com/kubernetes-sigs/kro/pkg/... \

@@ -24,6 +24,7 @@ import (
 	"time"
 
 	"k8s.io/client-go/kubernetes/scheme"
+	"k8s.io/client-go/rest"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/config"
@@ -104,7 +105,15 @@ func New(ctx context.Context, controllerConfig ControllerConfig) (_ *Environment
 		ControlPlaneStopTimeout: 2 * time.Minute,
 	}
 
-	env.TestEnv.ControlPlane.GetAPIServer().Configure().Append("enable-admission-plugins", "ValidatingAdmissionPolicy")
+	apiServer := env.TestEnv.ControlPlane.GetAPIServer().Configure()
+	apiServer.Append("enable-admission-plugins", "ValidatingAdmissionPolicy")
+	// The integration suites drive a single shared apiserver from many parallel
+	// Ginkgo processes. Disable API Priority & Fairness and raise the in-flight
+	// request ceilings so bursts of watches/lists are not throttled into 429s,
+	// which otherwise surface as flaky Eventually timeouts under load.
+	apiServer.Set("enable-priority-and-fairness", "false")
+	apiServer.Set("max-requests-inflight", "800")
+	apiServer.Set("max-mutating-requests-inflight", "400")
 
 	// Start the test environment
 	cfg, err := env.TestEnv.Start()
@@ -123,12 +132,8 @@ func New(ctx context.Context, controllerConfig ControllerConfig) (_ *Environment
 	env.ClientSet = clientSet
 
 	// Setup scheme
-	if err := internalv1alpha1.AddToScheme(scheme.Scheme); err != nil {
-		retErr = fmt.Errorf("adding internal kro scheme: %w", err)
-		return nil, retErr
-	}
-	if err := krov1alpha1.AddToScheme(scheme.Scheme); err != nil {
-		retErr = fmt.Errorf("adding kro scheme: %w", err)
+	if err := registerSchemes(); err != nil {
+		retErr = err
 		return nil, retErr
 	}
 
@@ -149,6 +154,60 @@ func New(ctx context.Context, controllerConfig ControllerConfig) (_ *Environment
 		return nil, retErr
 	}
 	return env, nil
+}
+
+// NewShared builds a thin Environment that connects to an already-running
+// control plane (started by another process, e.g. Ginkgo parallel process #1).
+//
+// Unlike New, it does NOT start an envtest control plane or a controller
+// manager: the process that called New owns those. NewShared only wires up the
+// client set, typed client, CRD manager and graph builder against the shared
+// rest.Config so that specs running on secondary processes can create and
+// observe objects on the single shared apiserver.
+func NewShared(ctx context.Context, cfg *rest.Config) (_ *Environment, retErr error) {
+	env := &Environment{}
+	defer func() {
+		if retErr == nil {
+			return
+		}
+		if cleanupErr := env.Stop(); cleanupErr != nil {
+			retErr = errors.Join(retErr, cleanupErr)
+		}
+	}()
+
+	env.ControllerConfig.LogWriter = io.Discard
+	env.context, env.cancel = context.WithCancel(ctx)
+
+	clientSet, err := kroclient.NewSet(kroclient.Config{RestConfig: cfg})
+	if err != nil {
+		retErr = fmt.Errorf("creating client set: %w", err)
+		return nil, retErr
+	}
+	env.ClientSet = clientSet
+
+	if err := registerSchemes(); err != nil {
+		retErr = err
+		return nil, retErr
+	}
+
+	if err := env.initializeClients(); err != nil {
+		retErr = fmt.Errorf("initializing clients: %w", err)
+		return nil, retErr
+	}
+
+	return env, nil
+}
+
+// registerSchemes adds the kro API types to the global scheme. It is safe to
+// call more than once; AddToScheme is idempotent.
+func registerSchemes() error {
+	if err := internalv1alpha1.AddToScheme(scheme.Scheme); err != nil {
+		return fmt.Errorf("adding internal kro scheme: %w", err)
+	}
+	if err := krov1alpha1.AddToScheme(scheme.Scheme); err != nil {
+		return fmt.Errorf("adding kro scheme: %w", err)
+	}
+	return nil
 }
 
 func (e *Environment) initializeClients() error {
@@ -219,7 +278,7 @@ func (e *Environment) setupController() error {
 		ctrlresourcegraphdefinition.Config{
 			AllowCRDDeletion:        e.ControllerConfig.AllowCRDDeletion,
 			InstanceRequeueInterval: e.ControllerConfig.ReconcileConfig.DefaultRequeueDuration,
-			ProgressRequeueDelay:    3 * time.Second,
+			ProgressRequeueDelay:    1 * time.Second,
 			MaxConcurrentReconciles: 40,
 			MaxGraphRevisions:       maxGraphRevisions,
 			RGDConfig:               rgdConfig,
