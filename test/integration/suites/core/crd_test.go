@@ -244,8 +244,11 @@ var _ = Describe("CRD", func() {
 				g.Expect(err).To(MatchError(errors.IsNotFound, "rgd should be deleted"))
 			}, 20*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
-			// Now verify the CRD is also gone (may take a moment for the
-			// apiserver's customresourcecleanup finalizer to clear).
+			// Now verify the CRD is also gone. Under heavy parallel CRD churn the
+			// apiserver's customresourcecleanup finalizer can lag for tens of
+			// seconds; unstick it (this CRD has no custom resources) so the
+			// deletion the controller initiated completes promptly.
+			unstickTerminatingCRD(ctx, crdName)
 			Eventually(func(g Gomega, ctx SpecContext) {
 				err := env.Client.Get(ctx, types.NamespacedName{Name: crdName},
 					&apiextensionsv1.CustomResourceDefinition{})
@@ -806,6 +809,12 @@ var _ = Describe("CRD", func() {
 
 			// Externally delete the managed CRD to simulate an out-of-band deletion.
 			Expect(env.Client.Delete(ctx, crd)).To(Succeed())
+
+			// Complete the (externally initiated) deletion promptly so the
+			// controller can recreate the CRD; under parallel churn the apiserver
+			// cleanup finalizer can otherwise leave it Terminating for tens of
+			// seconds. This CRD has no custom resources.
+			unstickTerminatingCRD(ctx, crdName)
 
 			// The controller's CRD metadata watch should detect the deletion event and
 			// trigger a reconciliation of the owning RGD, which calls crdManager.Ensure()
