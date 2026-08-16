@@ -96,7 +96,13 @@ func (e *Env) GetGraph(t *testing.T, key types.NamespacedName) *expv1alpha1.Grap
 // AwaitCondition polls until the Graph carries a condition of the given
 // type with the expected status. Timeout fails the test with the last
 // observed condition value.
-func (e *Env) AwaitCondition(t *testing.T, key types.NamespacedName, condType expv1alpha1.ConditionType, want metav1.ConditionStatus, timeout time.Duration) *expv1alpha1.Condition {
+func (e *Env) AwaitCondition(
+	t *testing.T,
+	key types.NamespacedName,
+	condType expv1alpha1.ConditionType,
+	want metav1.ConditionStatus,
+	timeout time.Duration,
+) *expv1alpha1.Condition {
 	t.Helper()
 	var observed *expv1alpha1.Condition
 	deadline := time.Now().Add(timeout)
@@ -125,7 +131,13 @@ func findCondition(conds expv1alpha1.Conditions, t expv1alpha1.ConditionType) *e
 
 // AwaitObject polls for a resource to exist and optionally satisfy
 // match(). Used for asserting templates produced their child objects.
-func (e *Env) AwaitObject(t *testing.T, gvk schema.GroupVersionKind, key types.NamespacedName, match func(*unstructured.Unstructured) error, timeout time.Duration) *unstructured.Unstructured {
+func (e *Env) AwaitObject(
+	t *testing.T,
+	gvk schema.GroupVersionKind,
+	key types.NamespacedName,
+	match func(*unstructured.Unstructured) error,
+	timeout time.Duration,
+) *unstructured.Unstructured {
 	t.Helper()
 	deadline := time.Now().Add(timeout)
 	var (

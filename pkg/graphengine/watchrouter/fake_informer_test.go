@@ -38,18 +38,11 @@ type fakeInformer struct {
 	stopCh   chan struct{}
 	syncedAt time.Time
 
-	// Static flag flipped to true after syncedAt has elapsed. Tests can
-	// also force this via setSynced.
+	// Static flag flipped to true after syncedAt has elapsed.
 	synced bool
 }
 
 func newFakeInformer() *fakeInformer { return &fakeInformer{stopCh: make(chan struct{})} }
-
-func (f *fakeInformer) setSynced(v bool) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	f.synced = v
-}
 
 func (f *fakeInformer) AddEventHandler(handler cache.ResourceEventHandler) (cache.ResourceEventHandlerRegistration, error) {
 	f.mu.Lock()

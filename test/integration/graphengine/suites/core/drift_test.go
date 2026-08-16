@@ -118,7 +118,9 @@ func TestDriftRestoresMutatedField(t *testing.T) {
 	// Hand-mutate data.v to "drifted" using a separate field manager
 	// so SSA recognizes the conflict and restores the krocodile value.
 	cm = cm.DeepCopy()
-	unstructured.SetNestedField(cm.Object, "drifted", "data", "v")
+	if err := unstructured.SetNestedField(cm.Object, "drifted", "data", "v"); err != nil {
+		t.Fatalf("set drift field: %v", err)
+	}
 	if err := env.Client.Update(env.Ctx, cm); err != nil {
 		t.Fatalf("apply drift: %v", err)
 	}
@@ -253,7 +255,9 @@ func TestDriftWatchesRegisterAcrossNotReadyNode(t *testing.T) {
 	// b should be in the coordinator's scalar index — drift it and
 	// confirm restoration.
 	cmB := env.AwaitObject(t, configMapGVK, bKey, nil, 5*time.Second).DeepCopy()
-	unstructured.SetNestedField(cmB.Object, "drifted", "data", "upstream")
+	if err := unstructured.SetNestedField(cmB.Object, "drifted", "data", "upstream"); err != nil {
+		t.Fatalf("set drift field: %v", err)
+	}
 	if err := env.Client.Update(env.Ctx, cmB); err != nil {
 		t.Fatalf("drift b: %v", err)
 	}

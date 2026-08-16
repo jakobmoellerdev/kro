@@ -247,7 +247,7 @@ func (s *Simple) Apply(ctx context.Context, rt *runtime.Runtime, w watchrouter.W
 			if isColl {
 				// A selector externalRef reads a read-only COLLECTION of
 				// external objects by label selector.
-				observed, err = s.applyRefCollection(ctx, w, rt, n, desired)
+				observed, err = s.applyRefCollection(ctx, w, n, desired)
 			} else {
 				observed, err = s.applyRef(ctx, w, rt, n, desired)
 			}
@@ -627,7 +627,7 @@ func (s *Simple) applyRef(ctx context.Context, w watchrouter.Watcher, rt *runtim
 // not "the instance's
 // namespace". An empty selector lists everything. A List error is hard; an
 // empty result is valid (an empty collection, treated as ready).
-func (s *Simple) applyRefCollection(ctx context.Context, w watchrouter.Watcher, rt *runtime.Runtime, n *runtime.Node, desired []*unstructured.Unstructured) ([]*unstructured.Unstructured, error) {
+func (s *Simple) applyRefCollection(ctx context.Context, w watchrouter.Watcher, n *runtime.Node, desired []*unstructured.Unstructured) ([]*unstructured.Unstructured, error) {
 	// forEach is rejected on ref nodes at translate time, so Resolve produced
 	// exactly one projected {apiVersion, kind, metadata{selector,namespace?}}
 	// object with CEL (incl. matchExpressions[].values[]) already evaluated.
