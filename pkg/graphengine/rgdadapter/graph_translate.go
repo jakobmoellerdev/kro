@@ -43,6 +43,10 @@ var ErrUnsupported = errors.New("rgdadapter: unsupported RGD shape")
 // forEach / readyWhen / includeWhen are copied through. The instance
 // spec is not emitted as a resource node — callers prepend InstanceSchemaNode
 // to expose it as `${schema.spec.*}`.
+//
+// When the RGD declares author status fields, a synthesized patch node
+// (StatusPatchNodeID) is appended to write them onto the instance's status
+// subresource; see authorStatusPatchNode.
 func ResourceGraphDefinitionToGraph(rgd *v1alpha1.ResourceGraphDefinition) (*v1alpha1.Graph, error) {
 	if rgd == nil {
 		return nil, fmt.Errorf("rgdadapter: resourcegraphdefinition is required")
@@ -67,7 +71,90 @@ func ResourceGraphDefinitionToGraph(rgd *v1alpha1.ResourceGraphDefinition) (*v1a
 		}
 		g.Spec.Nodes = append(g.Spec.Nodes, node)
 	}
+
+	// Synthesize the author-status writeback node: a patch node that writes
+	// the RGD's author status FIELDS onto the instance's status subresource.
+	// kro-owned conditions, author conditions, and .status.state stay
+	// controller-side. Absent when the RGD declares no author status fields.
+	statusNode, ok, err := authorStatusPatchNode(rgd)
+	if err != nil {
+		return nil, err
+	}
+	if ok {
+		g.Spec.Nodes = append(g.Spec.Nodes, statusNode)
+	}
 	return g, nil
+}
+
+// StatusPatchNodeID is the node ID of the synthesized author-status writeback
+// patch node. `instance` is reserved at the RGD level (kroReservedKeyWords),
+// so no user resource can collide, and it is not reserved by the Graph
+// compiler, so the synthesized node validates — the same split the `schema`
+// def node relies on.
+const StatusPatchNodeID = "instance"
+
+// authorStatusPatchNode builds the patch node that writes the RGD's author
+// status FIELDS (spec.schema.status minus the conditions block) onto the
+// instance's status subresource. It returns ok=false when the RGD declares no
+// author status fields or no target kind.
+//
+// The node targets the instance GVK (Schema.Group/APIVersion/Kind), keys the
+// target by ${schema.metadata.name} (+ namespace for namespaced instances),
+// and carries the author fields verbatim under body.status so their ${...}
+// CEL is compiled and type-checked like any patch body. BuildRuntimeForInstance
+// marks this node soft-deps + per-field-tolerant so it never gates on the
+// resources it reads and omits unresolved fields (mirroring
+// ProjectInstanceStatus's per-field progressive projection).
+func authorStatusPatchNode(rgd *v1alpha1.ResourceGraphDefinition) (v1alpha1.Node, bool, error) {
+	if rgd.Spec.Schema == nil {
+		return v1alpha1.Node{}, false, nil
+	}
+	raw := rgd.Spec.Schema.Status.Raw
+	if len(raw) == 0 {
+		return v1alpha1.Node{}, false, nil
+	}
+	var statusMap map[string]any
+	if err := json.Unmarshal(raw, &statusMap); err != nil {
+		return v1alpha1.Node{}, false, fmt.Errorf("rgdadapter: unmarshal status: %w", err)
+	}
+	// Author conditions stay controller-side (ProjectInstanceConditions); only
+	// the non-condition status fields move to the node.
+	delete(statusMap, "conditions")
+	if len(statusMap) == 0 {
+		return v1alpha1.Node{}, false, nil
+	}
+
+	kind := rgd.Spec.Schema.Kind
+	if kind == "" {
+		// No target kind (a malformed or test-only schema); nothing to write.
+		return v1alpha1.Node{}, false, nil
+	}
+	group := rgd.Spec.Schema.Group
+	if group == "" {
+		group = "kro.run"
+	}
+	apiVersion := rgd.Spec.Schema.APIVersion
+	if group != "" {
+		apiVersion = group + "/" + apiVersion
+	}
+	namespaced := rgd.Spec.Schema.Scope != v1alpha1.ResourceScopeCluster
+
+	bodyRaw, err := json.Marshal(map[string]any{"status": statusMap})
+	if err != nil {
+		return v1alpha1.Node{}, false, fmt.Errorf("rgdadapter: marshal status body: %w", err)
+	}
+
+	patch := &v1alpha1.PatchSpec{
+		APIVersion:  apiVersion,
+		Kind:        kind,
+		Subresource: "status",
+		Metadata:    v1alpha1.PatchMetadata{Name: "${schema.metadata.name}"},
+		Body:        &runtime.RawExtension{Raw: bodyRaw},
+	}
+	if namespaced {
+		patch.Metadata.Namespace = "${schema.metadata.namespace}"
+	}
+	return v1alpha1.Node{ID: StatusPatchNodeID, Patch: patch}, true, nil
 }
 
 func resourceToNode(res *v1alpha1.Resource) (v1alpha1.Node, error) {

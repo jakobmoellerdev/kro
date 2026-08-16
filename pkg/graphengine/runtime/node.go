@@ -22,6 +22,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/schema"
 
 	krocel "github.com/kubernetes-sigs/kro/pkg/cel"
+	"github.com/kubernetes-sigs/kro/pkg/cel/sentinels"
 	"github.com/kubernetes-sigs/kro/pkg/graph/variable"
 	"github.com/kubernetes-sigs/kro/pkg/graphengine/compiler"
 	"github.com/kubernetes-sigs/kro/pkg/runtime/resolver"
@@ -313,6 +314,14 @@ func (n *Node) renderOne(bindings map[string]any) (*unstructured.Unstructured, e
 		val, err := v.Expression.Eval(scope)
 		if err != nil {
 			if isCELDataPending(err) {
+				if n.spec.TolerateDataPending {
+					// Omit this field and keep rendering the rest: the resolver
+					// strips the sentinel so a data-pending field disappears
+					// rather than data-pending the whole node. Mirrors
+					// ProjectInstanceStatus's per-field skip for status writeback.
+					data[v.Expression.Original] = sentinels.Omit{}
+					continue
+				}
 				return nil, fmt.Errorf("node %q: eval %q at %q: %w (%w)", n.spec.ID, v.Expression.UserExpression(), v.Path, err, ErrDataPending)
 			}
 			return nil, fmt.Errorf("node %q: eval %q at %q: %w", n.spec.ID, v.Expression.UserExpression(), v.Path, err)

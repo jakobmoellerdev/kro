@@ -109,6 +109,8 @@ type CompileOption func(*compileOptions)
 
 type compileOptions struct {
 	nodeSchemaOverrides map[string]*spec.Schema
+	softDepNodes        map[string]struct{}
+	dataPendingTolerant map[string]struct{}
 }
 
 // WithNodeSchemaOverride declares the OpenAPI schema a node publishes into
@@ -122,6 +124,37 @@ func WithNodeSchemaOverride(nodeID string, s *spec.Schema) CompileOption {
 			o.nodeSchemaOverrides = make(map[string]*spec.Schema)
 		}
 		o.nodeSchemaOverrides[nodeID] = s
+	}
+}
+
+// WithSoftDependencies marks a node so that every local resource reference it
+// carries is classified as a soft (non-gating) dependency: the node gets no
+// DAG edge to those resources and does not gate on them, exactly as if each
+// reference were optional-chained. The referenced nodes are still seeded with
+// an empty object in scope, so an unresolved reference data-pends per field
+// rather than failing the whole graph. Used by the RGD adapter for the
+// synthesized author-status writeback node, which must observe resources as
+// they become available without ordering the reconcile around them.
+func WithSoftDependencies(nodeID string) CompileOption {
+	return func(o *compileOptions) {
+		if o.softDepNodes == nil {
+			o.softDepNodes = make(map[string]struct{})
+		}
+		o.softDepNodes[nodeID] = struct{}{}
+	}
+}
+
+// WithDataPendingTolerant marks a node so that a field whose expression is
+// data-pending is omitted from the rendered object rather than failing the
+// whole node. The node still applies its remaining resolved fields. Used with
+// WithSoftDependencies for the author-status writeback node so status fields
+// appear progressively, mirroring ProjectInstanceStatus's per-field skip.
+func WithDataPendingTolerant(nodeID string) CompileOption {
+	return func(o *compileOptions) {
+		if o.dataPendingTolerant == nil {
+			o.dataPendingTolerant = make(map[string]struct{})
+		}
+		o.dataPendingTolerant[nodeID] = struct{}{}
 	}
 }
 
@@ -145,6 +178,8 @@ func (c *Compiler) CompileWithOptions(g *expv1alpha1.Graph, opts ...CompileOptio
 	}
 	ctx := c.rootContext()
 	ctx.nodeSchemaOverrides = co.nodeSchemaOverrides
+	ctx.softDepNodes = co.softDepNodes
+	ctx.dataPendingTolerant = co.dataPendingTolerant
 	prog, _, err := ctx.compileFrame(graph.Spec.Nodes, true)
 	if err != nil {
 		return nil, err
@@ -190,6 +225,9 @@ func (ctx *CompilationContext) compileFrame(apiNodes []expv1alpha1.Node, isRoot 
 		built, sch, err := ctx.buildNode(p, apiNode, i)
 		if err != nil {
 			return nil, nil, fmt.Errorf("build node %q: %w", apiNode.ID, err)
+		}
+		if _, ok := ctx.dataPendingTolerant[built.ID]; ok {
+			built.TolerateDataPending = true
 		}
 		nodes[built.ID] = built
 		if sch != nil {
@@ -445,6 +483,16 @@ func (ctx *CompilationContext) buildDependencyGraph(nodes map[string]*Node, insp
 			return nil, nil, fmt.Errorf("node %q: %w", n.ID, err)
 		}
 		captured = append(captured, capt...)
+		if _, soft := ctx.softDepNodes[n.ID]; soft {
+			// Reclassify every hard resource dependency as soft: the node gets
+			// no DAG edge and imposes no ordering, so it observes resources as
+			// they publish instead of gating the reconcile. Captured ancestor
+			// refs are left untouched (this node has none in practice).
+			for _, d := range n.Dependencies {
+				addSoftDependency(n, d)
+			}
+			n.Dependencies = nil
+		}
 		reconcileSoftDependencies(n)
 		if err := g.AddDependencies(n.ID, n.Dependencies); err != nil {
 			return nil, nil, fmt.Errorf("node %q: register deps: %w", n.ID, err)

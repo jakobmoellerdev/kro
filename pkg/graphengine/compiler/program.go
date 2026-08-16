@@ -97,6 +97,12 @@ type Node struct {
 	// resource; "status" routes the apply through the status subresource.
 	Subresource string
 
+	// TolerateDataPending makes the runtime omit a field whose expression is
+	// data-pending instead of failing the whole node, applying the remaining
+	// resolved fields. Set via WithDataPendingTolerant for the RGD adapter's
+	// author-status writeback node so status fields project progressively.
+	TolerateDataPending bool
+
 	// Object is the parsed payload as an unstructured object:
 	//   Template: the user-authored manifest
 	//   Ref:            the ExternalRef projected as {apiVersion, kind, metadata}

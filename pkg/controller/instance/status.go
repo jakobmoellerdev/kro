@@ -39,6 +39,12 @@ const (
 	ResourcesReady  = string(v1alpha1.InstanceConditionTypeResourcesReady)
 )
 
+// instanceStatusFieldManager owns the controller-written status surface
+// (conditions + state) via server-side apply. It is distinct from the status
+// patch node's per-node field manager (which owns the author status FIELDS), so
+// the two writers manage disjoint fields and neither reverts the other.
+const instanceStatusFieldManager = "kro-instance-status"
+
 var condSet = apis.NewReadyConditions(InstanceManaged, GraphResolved, ResourcesReady)
 
 func NewConditionsMarkerFor(obj *unstructured.Unstructured) *ConditionsMarker {
@@ -281,6 +287,75 @@ func (c *Controller) persistStatus(
 		).Inc()
 	}
 
+	return nil
+}
+
+// persistConditionsAndState writes the controller-owned status surface
+// (conditions + .status.state) onto the instance's status subresource via
+// server-side apply under instanceStatusFieldManager. The author status FIELDS
+// are written separately by the status patch node's field manager, so the two
+// writers manage disjoint fields: the SSA apply names only conditions + state
+// and never reverts the node's author fields.
+//
+// The write is skipped when the wire already holds identical conditions+state
+// (statusesMatch over just those keys), preserving the redundant-write guard
+// that prevents a resourceVersion-bump reconcile loop. The state-transition
+// metric fires on a change. Conditions/state are mirrored onto inst so the
+// reconcile-level deferred event/metric emitters read the persisted surface.
+func (c *Controller) persistConditionsAndState(
+	ctx context.Context,
+	inst *unstructured.Unstructured,
+	wireStatus map[string]interface{},
+	status map[string]interface{},
+	previousState string,
+) error {
+	// Mirror conditions/state onto the instance for the deferred emitters,
+	// leaving any author status fields already present untouched.
+	if inst.Object["status"] == nil {
+		inst.Object["status"] = map[string]interface{}{}
+	}
+	if s, ok := inst.Object["status"].(map[string]interface{}); ok {
+		s["conditions"] = status["conditions"]
+		s["state"] = status["state"]
+	}
+
+	// Skip the API write when the wire already carries identical conditions+state.
+	wireCS := map[string]interface{}{
+		"conditions": wireStatus["conditions"],
+		"state":      wireStatus["state"],
+	}
+	if statusesMatch(wireCS, status) {
+		return nil
+	}
+
+	patchObj := instanceSSAPatch(inst)
+	patchObj.Object["status"] = status
+
+	ri := c.client.Dynamic().Resource(c.gvr)
+	var instanceClient dynamic.ResourceInterface = ri
+	if c.namespaced {
+		instanceClient = ri.Namespace(inst.GetNamespace())
+	}
+	err := retry.RetryOnConflict(retry.DefaultRetry, func() error {
+		_, aerr := instanceClient.ApplyStatus(ctx, inst.GetName(), patchObj, metav1.ApplyOptions{
+			FieldManager: instanceStatusFieldManager,
+			Force:        true,
+		})
+		return aerr
+	})
+	if err != nil {
+		return err
+	}
+
+	writtenState, _ := status["state"].(string)
+	if previousState != writtenState {
+		gvk := inst.GroupVersionKind().String()
+		metrics.InstanceStateTransitionsTotal.WithLabelValues(
+			gvk,
+			previousState,
+			writtenState,
+		).Inc()
+	}
 	return nil
 }
 

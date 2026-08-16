@@ -52,10 +52,11 @@ import (
 //  2. Build a per-reconcile Runtime via rgdadapter.BuildRuntimeForInstance.
 //  3. Apply all Graph nodes via the executor.Simple, wired to the instance's
 //     dynamiccontroller.InstanceWatcher (via instanceWatcherBridge).
-//  4. Project .status fields via rgdadapter.ProjectInstanceStatus and patch
-//     them onto the instance.
+//  4. The synthesized status patch node writes the author status FIELDS onto
+//     the instance during executor.Apply; the controller writes conditions +
+//     .status.state via persistGraphEngineStatus.
 //  5. Project author conditions via rgdadapter.ProjectInstanceConditions and
-//     merge them into the status patch.
+//     merge them into the conditions written by the controller.
 //
 // Error policy: hard errors propagate to controller-runtime for
 // requeue-with-backoff; ErrNotReady from the executor is a soft signal that the
@@ -188,15 +189,14 @@ func (c *Controller) reconcileViaGraphEngine(
 		log.V(1).Info("graph-engine: ApplySet inventory/prune failed (non-fatal)", "error", invErr)
 	}
 
-	// Project status fields and persist the full status (built-in conditions +
-	// projected fields + author conditions), skip-write guarded by statusesMatch.
-	statusFields, projErr := rgdadapter.ProjectInstanceStatus(rt, rgd)
-	if projErr != nil {
-		log.Error(projErr, "graph-engine: status projection failed")
-	}
-	degraded := hardErr || projErr != nil
+	// Persist the controller-owned status surface (built-in + author conditions
+	// and .status.state), skip-write guarded by statusesMatch. The author
+	// status FIELDS are written by the synthesized status patch node during
+	// executor.Apply above, under its own field manager — the controller no
+	// longer projects them here, so the two writers stay on disjoint fields.
+	degraded := hardErr
 
-	if err := c.persistGraphEngineStatus(ctx, inst, wireStatus, statusFields, rt, rgd, degraded); err != nil {
+	if err := c.persistGraphEngineStatus(ctx, inst, wireStatus, rt, rgd, degraded); err != nil {
 		log.Error(err, "graph-engine: status persist failed")
 		return err
 	}
@@ -449,38 +449,27 @@ func inventoryUpToDate(inst *unstructured.Unstructured, wantLabels, wantAnnotati
 	return true
 }
 
-// persistGraphEngineStatus composes the wire status for the instance and
-// persists it through persistStatus, reusing statusesMatch skip-write and
-// state-transition metrics. Built-in conditions and state come from the
-// marker-mutated instance, projected fields merge in, and author conditions
-// (when the RGD declares them) replace the built-ins after stamping and merging
-// with the previous cycle.
+// persistGraphEngineStatus composes the controller-owned status surface for the
+// instance (built-in conditions, author conditions when the RGD declares them,
+// and .status.state) and persists it through persistConditionsAndState, reusing
+// the statusesMatch skip-write and the state-transition metric. The author
+// status FIELDS are NOT written here — the synthesized status patch node owns
+// them under its own field manager, so the controller's writer and the node's
+// writer touch disjoint fields.
 //
-// statusFields == nil preserves the non-condition/state fields already on the
-// wire. degraded forces state=Error regardless of condition readiness.
+// degraded forces state=Error regardless of condition readiness.
 func (c *Controller) persistGraphEngineStatus(
 	ctx context.Context,
 	inst *unstructured.Unstructured,
 	wireStatus map[string]interface{},
-	statusFields map[string]any,
 	rt *geruntime.Runtime,
 	rgd *v1alpha1.ResourceGraphDefinition,
 	degraded bool,
 ) error {
 	previousState, _ := wireStatus["state"].(string)
 
+	// Only conditions and state: author status fields belong to the patch node.
 	status := map[string]interface{}{}
-	if statusFields == nil {
-		for k, v := range wireStatus {
-			if k != "conditions" && k != "state" {
-				status[k] = v
-			}
-		}
-	} else {
-		for k, v := range statusFields {
-			status[k] = v
-		}
-	}
 
 	builtins := builtinConditions(inst)
 	status["conditions"] = conditionsToInterfaceSlice(builtins)
@@ -510,12 +499,7 @@ func (c *Controller) persistGraphEngineStatus(
 		}
 	}
 
-	ri := c.client.Dynamic().Resource(c.gvr)
-	var instanceClient dynamic.ResourceInterface = ri
-	if c.namespaced {
-		instanceClient = ri.Namespace(inst.GetNamespace())
-	}
-	return c.persistStatus(ctx, instanceClient, inst, wireStatus, status, previousState)
+	return c.persistConditionsAndState(ctx, inst, wireStatus, status, previousState)
 }
 
 // instanceWatcherBridge adapts a dynamiccontroller.InstanceWatcher to the

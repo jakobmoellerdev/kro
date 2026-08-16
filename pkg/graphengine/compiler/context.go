@@ -69,6 +69,13 @@ type CompilationContext struct {
 	// with the RGD's declared SimpleSchema, which stays stable across
 	// reconciles even when the instance is missing fields.
 	nodeSchemaOverrides map[string]*spec.Schema
+
+	// softDepNodes and dataPendingTolerant carry the per-node affordances set
+	// via WithSoftDependencies / WithDataPendingTolerant. They flow to child
+	// frames unchanged; the RGD adapter only uses them for the root-frame
+	// author-status writeback node, but sharing keeps the semantics uniform.
+	softDepNodes        map[string]struct{}
+	dataPendingTolerant map[string]struct{}
 }
 
 // newRootContext builds the top-level compilation context for a single
@@ -96,6 +103,8 @@ func (ctx *CompilationContext) child() *CompilationContext {
 		fieldCache:          ctx.fieldCache,
 		localIDs:            map[string]struct{}{},
 		nodeSchemaOverrides: ctx.nodeSchemaOverrides,
+		softDepNodes:        ctx.softDepNodes,
+		dataPendingTolerant: ctx.dataPendingTolerant,
 	}
 }
 

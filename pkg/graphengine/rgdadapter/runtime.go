@@ -91,6 +91,18 @@ func BuildRuntimeForInstance(
 		}
 		compileOpts = append(compileOpts, compiler.WithNodeSchemaOverride(SchemaNodeID, schemaVarSchema))
 	}
+	// If the translator synthesized the author-status writeback node, mark it
+	// soft-deps (never gates on the resources it reads) and per-field-tolerant
+	// (a data-pending field is omitted, remaining fields still apply) so status
+	// projects progressively and non-gating, mirroring ProjectInstanceStatus.
+	for i := range g.Spec.Nodes {
+		if g.Spec.Nodes[i].ID == StatusPatchNodeID && g.Spec.Nodes[i].Patch != nil {
+			compileOpts = append(compileOpts,
+				compiler.WithSoftDependencies(StatusPatchNodeID),
+				compiler.WithDataPendingTolerant(StatusPatchNodeID))
+			break
+		}
+	}
 	prog, err := c.CompileWithOptions(g, compileOpts...)
 	if err != nil {
 		return nil, nil, fmt.Errorf("rgdadapter: compile: %w", err)
