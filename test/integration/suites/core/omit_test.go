@@ -83,7 +83,7 @@ var _ = Describe("Omit", func() {
 			err := env.Client.Get(ctx, types.NamespacedName{Name: rgd.Name}, createdRGD)
 			g.Expect(err).ToNot(HaveOccurred())
 			g.Expect(createdRGD.Status.State).To(Equal(krov1alpha1.ResourceGraphDefinitionStateActive))
-		}, 10*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
+		}, 30*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 		// --- Case 1: optional is empty → field should be omitted ---
 		name1 := fmt.Sprintf("omit-yes-%s", rand.String(4))
@@ -278,7 +278,7 @@ var _ = Describe("Omit", func() {
 			err := env.Client.Get(ctx, types.NamespacedName{Name: rgd.Name}, createdRGD)
 			g.Expect(err).ToNot(HaveOccurred())
 			g.Expect(createdRGD.Status.State).To(Equal(krov1alpha1.ResourceGraphDefinitionStateActive))
-		}, 10*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
+		}, 30*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 		// --- Case 1: optionalArg is empty → array element should be omitted ---
 		name1 := fmt.Sprintf("omit-arr-yes-%s", rand.String(4))

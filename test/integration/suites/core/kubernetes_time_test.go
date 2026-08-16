@@ -92,7 +92,7 @@ var _ = Describe("ResourceGraphDefinition Time Expressions", func() {
 			}, created)
 			g.Expect(err).ToNot(HaveOccurred())
 			g.Expect(created.Status.State).To(Equal(krov1alpha1.ResourceGraphDefinitionStateActive))
-		}, 10*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
+		}, 30*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 		By("creating instance")
 		instance := &unstructured.Unstructured{

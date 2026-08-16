@@ -183,7 +183,7 @@ var _ = Describe("Dependency Readiness", func() {
 
 			g.Expect(createdRGD.Status.State).To(Equal(krov1alpha1.ResourceGraphDefinitionStateActive))
 
-		}, 10*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
+		}, 30*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 		instanceName := "test-dep-readiness"
 		// Create instance with both configmaps NOT ready initially

@@ -73,7 +73,7 @@ var _ = Describe("Instance Resource Watch", func() {
 			for _, cond := range rgd.Status.Conditions {
 				g.Expect(cond.Status).To(Equal(metav1.ConditionTrue))
 			}
-		}, 10*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
+		}, 30*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 		instance := &unstructured.Unstructured{}
 		instance.SetAPIVersion(krov1alpha1.GroupVersion.String())

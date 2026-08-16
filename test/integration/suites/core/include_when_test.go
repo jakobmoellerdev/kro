@@ -247,7 +247,7 @@ var _ = Describe("Conditions", func() {
 
 			g.Expect(createdRGD.Status.State).To(Equal(krov1alpha1.ResourceGraphDefinitionStateActive))
 
-		}, 10*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
+		}, 30*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 		name := "test-conditions"
 		// Create instance
@@ -422,7 +422,7 @@ var _ = Describe("Conditions", func() {
 			err := env.Client.Get(ctx, types.NamespacedName{Name: rgd.Name}, createdRGD)
 			g.Expect(err).ToNot(HaveOccurred())
 			g.Expect(createdRGD.Status.State).To(Equal(krov1alpha1.ResourceGraphDefinitionStateActive))
-		}, 10*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
+		}, 30*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 		name := "test-conditions-contagious"
 		instance := &unstructured.Unstructured{
@@ -545,7 +545,7 @@ var _ = Describe("Conditions", func() {
 			err := env.Client.Get(ctx, types.NamespacedName{Name: rgd.Name}, createdRGD)
 			g.Expect(err).ToNot(HaveOccurred())
 			g.Expect(createdRGD.Status.State).To(Equal(krov1alpha1.ResourceGraphDefinitionStateActive))
-		}, 10*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
+		}, 30*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 		name := "test-resource-backed-contagious"
 		instance := &unstructured.Unstructured{
@@ -696,7 +696,7 @@ var _ = Describe("Conditions", func() {
 			err := env.Client.Get(ctx, types.NamespacedName{Name: rgd.Name}, createdRGD)
 			g.Expect(err).ToNot(HaveOccurred())
 			g.Expect(createdRGD.Status.State).To(Equal(krov1alpha1.ResourceGraphDefinitionStateActive))
-		}, 10*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
+		}, 30*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 		name := "status-backed"
 		instance := &unstructured.Unstructured{

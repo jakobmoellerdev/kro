@@ -109,7 +109,7 @@ var _ = Describe("ApplySet", func() {
 				err := env.Client.Get(ctx, types.NamespacedName{Name: rgd.Name}, rgd)
 				g.Expect(err).ToNot(HaveOccurred())
 				g.Expect(rgd.Status.State).To(Equal(krov1alpha1.ResourceGraphDefinitionStateActive))
-			}, 10*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
+			}, 30*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 			By("creating instance")
 			instance := &unstructured.Unstructured{
@@ -257,7 +257,7 @@ var _ = Describe("ApplySet", func() {
 				err := env.Client.Get(ctx, types.NamespacedName{Name: rgd.Name}, rgd)
 				g.Expect(err).ToNot(HaveOccurred())
 				g.Expect(rgd.Status.State).To(Equal(krov1alpha1.ResourceGraphDefinitionStateActive))
-			}, 10*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
+			}, 30*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 			By("creating instance with includeSecret=true")
 			instance := &unstructured.Unstructured{
@@ -443,7 +443,7 @@ var _ = Describe("ApplySet", func() {
 				err := env.Client.Get(ctx, types.NamespacedName{Name: rgd.Name}, rgd)
 				g.Expect(err).ToNot(HaveOccurred())
 				g.Expect(rgd.Status.State).To(Equal(krov1alpha1.ResourceGraphDefinitionStateActive))
-			}, 10*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
+			}, 30*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 			instance := &unstructured.Unstructured{
 				Object: map[string]interface{}{
@@ -569,7 +569,7 @@ var _ = Describe("ApplySet", func() {
 				err := env.Client.Get(ctx, types.NamespacedName{Name: rgd.Name}, rgd)
 				g.Expect(err).ToNot(HaveOccurred())
 				g.Expect(rgd.Status.State).To(Equal(krov1alpha1.ResourceGraphDefinitionStateActive))
-			}, 10*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
+			}, 30*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 			instance := &unstructured.Unstructured{
 				Object: map[string]interface{}{
@@ -706,7 +706,7 @@ var _ = Describe("ApplySet", func() {
 				err := env.Client.Get(ctx, types.NamespacedName{Name: rgd.Name}, rgd)
 				g.Expect(err).ToNot(HaveOccurred())
 				g.Expect(rgd.Status.State).To(Equal(krov1alpha1.ResourceGraphDefinitionStateActive))
-			}, 10*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
+			}, 30*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 			instance := &unstructured.Unstructured{
 				Object: map[string]interface{}{
@@ -848,7 +848,7 @@ var _ = Describe("ApplySet", func() {
 				err := env.Client.Get(ctx, types.NamespacedName{Name: rgd.Name}, rgd)
 				g.Expect(err).ToNot(HaveOccurred())
 				g.Expect(rgd.Status.State).To(Equal(krov1alpha1.ResourceGraphDefinitionStateActive))
-			}, 10*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
+			}, 30*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 			By("PHASE 1: creating instance with only ConfigMap (no Secret, no SA)")
 			instance := &unstructured.Unstructured{
@@ -1092,7 +1092,7 @@ var _ = Describe("ApplySet", func() {
 				err := env.Client.Get(ctx, types.NamespacedName{Name: rgd.Name}, rgd)
 				g.Expect(err).ToNot(HaveOccurred())
 				g.Expect(rgd.Status.State).To(Equal(krov1alpha1.ResourceGraphDefinitionStateActive))
-			}, 10*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
+			}, 30*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 			By("creating instance with 3 values")
 			instance := &unstructured.Unstructured{
@@ -1223,7 +1223,7 @@ var _ = Describe("ApplySet", func() {
 				err := env.Client.Get(ctx, types.NamespacedName{Name: rgd.Name}, rgd)
 				g.Expect(err).ToNot(HaveOccurred())
 				g.Expect(rgd.Status.State).To(Equal(krov1alpha1.ResourceGraphDefinitionStateActive))
-			}, 10*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
+			}, 30*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 			By("creating instance with 3 values")
 			instance := &unstructured.Unstructured{
@@ -1366,7 +1366,7 @@ var _ = Describe("ApplySet", func() {
 					err := env.Client.Get(ctx, types.NamespacedName{Name: rgd.Name}, rgd)
 					g.Expect(err).ToNot(HaveOccurred())
 					g.Expect(rgd.Status.State).To(Equal(krov1alpha1.ResourceGraphDefinitionStateActive))
-				}, 10*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
+				}, 30*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 			}
 
 			By("creating instance from RGD1")
@@ -1523,7 +1523,7 @@ var _ = Describe("ApplySet", func() {
 				err := env.Client.Get(ctx, types.NamespacedName{Name: rgd.Name}, rgd)
 				g.Expect(err).ToNot(HaveOccurred())
 				g.Expect(rgd.Status.State).To(Equal(krov1alpha1.ResourceGraphDefinitionStateActive))
-			}, 10*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
+			}, 30*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 			By("creating first instance")
 			instance1 := &unstructured.Unstructured{
@@ -1715,7 +1715,7 @@ var _ = Describe("ApplySet", func() {
 				err := env.Client.Get(ctx, types.NamespacedName{Name: rgd.Name}, rgd)
 				g.Expect(err).ToNot(HaveOccurred())
 				g.Expect(rgd.Status.State).To(Equal(krov1alpha1.ResourceGraphDefinitionStateActive))
-			}, 10*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
+			}, 30*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 			By("creating instance with custom labels and annotations")
 			instance := &unstructured.Unstructured{

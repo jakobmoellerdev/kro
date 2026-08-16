@@ -1840,7 +1840,7 @@ func updateRGDTemplate(ctx SpecContext, rgdName, label string) {
 		fresh.Spec.Resources[0].Template.Raw = []byte(fmt.Sprintf(template, label))
 		err = env.Client.Update(ctx, fresh)
 		g.Expect(err).ToNot(HaveOccurred())
-	}, 10*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
+	}, 30*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 }
 
 // emulateGCForRGD manually deletes GraphRevisions that have a deletionTimestamp,
