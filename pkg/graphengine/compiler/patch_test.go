@@ -48,7 +48,7 @@ func TestCompilePatch(t *testing.T) {
 	assert.Equal(t, "configmaps", n.GVR.Resource)
 	assert.True(t, n.Namespaced)
 	assert.Empty(t, n.Subresource)
-	assert.Contains(t, n.Dependencies, "cfg", "body CEL reference is a dependency")
+	assert.Contains(t, n.HardDepIDs(), "cfg", "body CEL reference is a dependency")
 
 	// A patch contributes fields; it publishes no schema into CEL scope.
 	_, published := prog.NodeSchemas["p"]
@@ -84,7 +84,7 @@ func TestCompilePatch_DynamicGVK(t *testing.T) {
 	assert.Equal(t, NodeKindPatch, n.Kind)
 	assert.True(t, n.DynamicGVK)
 	assert.True(t, prog.HasDynamicGVK)
-	assert.Contains(t, n.Dependencies, "cfg")
+	assert.Contains(t, n.HardDepIDs(), "cfg")
 }
 
 // TestCompilePatch_RejectsForEach verifies forEach is not allowed on a patch

@@ -95,7 +95,7 @@ func TestCompile(t *testing.T) {
 				assert.Equal(t, "configmaps", n.GVR.Resource)
 				assert.True(t, n.Namespaced)
 				assert.Empty(t, n.Variables)
-				assert.Empty(t, n.Dependencies)
+				assert.Empty(t, n.HardDepIDs())
 				assert.Contains(t, prog.NodeSchemas, "cm")
 				assert.Equal(t, []string{"cm"}, prog.TopologicalOrder)
 			},
@@ -128,7 +128,7 @@ func TestCompile(t *testing.T) {
 				}),
 			),
 			after: func(t *testing.T, prog *Program, _ *expv1alpha1.Graph) {
-				assert.Equal(t, []string{"naming"}, prog.Nodes["appPods"].Dependencies)
+				assert.Equal(t, []string{"naming"}, prog.Nodes["appPods"].HardDepIDs())
 			},
 		},
 		{
@@ -184,8 +184,8 @@ func TestCompile(t *testing.T) {
 			),
 			after: func(t *testing.T, prog *Program, _ *expv1alpha1.Graph) {
 				assert.Equal(t, []string{"base", "cm1", "cm2"}, prog.TopologicalOrder)
-				assert.Equal(t, []string{"base"}, prog.Nodes["cm1"].Dependencies)
-				assert.Equal(t, []string{"cm1"}, prog.Nodes["cm2"].Dependencies)
+				assert.Equal(t, []string{"base"}, prog.Nodes["cm1"].HardDepIDs())
+				assert.Equal(t, []string{"cm1"}, prog.Nodes["cm2"].HardDepIDs())
 			},
 		},
 		{
@@ -203,8 +203,8 @@ func TestCompile(t *testing.T) {
 			),
 			after: func(t *testing.T, prog *Program, _ *expv1alpha1.Graph) {
 				cm := prog.Nodes["cm"]
-				assert.Empty(t, cm.Dependencies, "soft ref must not be a hard dependency")
-				assert.Equal(t, []string{"later"}, cm.SoftDependencies)
+				assert.Empty(t, cm.HardDepIDs(), "soft ref must not be a hard dependency")
+				assert.Equal(t, []string{"later"}, cm.SoftDepIDs())
 				assert.Empty(t, prog.DAG.Vertices["cm"].DependsOn, "soft ref must not add a DAG edge")
 				// No edge means the referrer may order before its target.
 				assert.Less(t, indexOf(prog.TopologicalOrder, "cm"), indexOf(prog.TopologicalOrder, "later"))
@@ -224,8 +224,8 @@ func TestCompile(t *testing.T) {
 			),
 			after: func(t *testing.T, prog *Program, _ *expv1alpha1.Graph) {
 				cm := prog.Nodes["cm"]
-				assert.Equal(t, []string{"src"}, cm.Dependencies)
-				assert.Empty(t, cm.SoftDependencies, "hard access wins; not a soft dep")
+				assert.Equal(t, []string{"src"}, cm.HardDepIDs())
+				assert.Empty(t, cm.SoftDepIDs(), "hard access wins; not a soft dep")
 				assert.Contains(t, prog.DAG.Vertices["cm"].DependsOn, "src")
 				assert.Equal(t, []string{"src", "cm"}, prog.TopologicalOrder)
 			},
@@ -265,7 +265,7 @@ func TestCompile(t *testing.T) {
 				assert.Less(t, idx("root"), idx("right"))
 				assert.Less(t, idx("left"), idx("merge"))
 				assert.Less(t, idx("right"), idx("merge"))
-				assert.ElementsMatch(t, []string{"left", "right"}, prog.Nodes["merge"].Dependencies)
+				assert.ElementsMatch(t, []string{"left", "right"}, prog.Nodes["merge"].HardDepIDs())
 			},
 		},
 		{
@@ -279,7 +279,7 @@ func TestCompile(t *testing.T) {
 				}),
 			),
 			after: func(t *testing.T, prog *Program, _ *expv1alpha1.Graph) {
-				assert.Equal(t, []string{"v"}, prog.Nodes["cm"].Dependencies)
+				assert.Equal(t, []string{"v"}, prog.Nodes["cm"].HardDepIDs())
 			},
 		},
 
@@ -295,7 +295,7 @@ func TestCompile(t *testing.T) {
 				}, generator.ForEachDim("el", "${[src.metadata.name]}")),
 			),
 			after: func(t *testing.T, prog *Program, _ *expv1alpha1.Graph) {
-				assert.Equal(t, []string{"src"}, prog.Nodes["p"].Dependencies)
+				assert.Equal(t, []string{"src"}, prog.Nodes["p"].HardDepIDs())
 				assert.True(t, prog.Nodes["p"].IsCollection())
 			},
 		},
@@ -310,7 +310,7 @@ func TestCompile(t *testing.T) {
 				}, generator.ForEachDim("el", "${seed.items}")),
 			),
 			after: func(t *testing.T, prog *Program, _ *expv1alpha1.Graph) {
-				assert.Equal(t, []string{"seed"}, prog.Nodes["p"].Dependencies)
+				assert.Equal(t, []string{"seed"}, prog.Nodes["p"].HardDepIDs())
 			},
 		},
 
@@ -402,7 +402,7 @@ func TestCompile(t *testing.T) {
 				generator.WithIncludeWhen("${flag.enabled}"),
 			),
 			after: func(t *testing.T, prog *Program, _ *expv1alpha1.Graph) {
-				assert.Equal(t, []string{"flag"}, prog.Nodes["guarded"].Dependencies)
+				assert.Equal(t, []string{"flag"}, prog.Nodes["guarded"].HardDepIDs())
 				require.Len(t, prog.Nodes["guarded"].IncludeWhen, 1)
 			},
 		},
@@ -503,7 +503,7 @@ func TestCompile(t *testing.T) {
 				generator.WithReadyWhen("${v.phase == 'Active'}"),
 			),
 			after: func(t *testing.T, prog *Program, _ *expv1alpha1.Graph) {
-				assert.Empty(t, prog.Nodes["v"].Dependencies)
+				assert.Empty(t, prog.Nodes["v"].HardDepIDs())
 				require.Len(t, prog.Nodes["v"].ReadyWhen, 1)
 			},
 		},
@@ -981,7 +981,7 @@ func TestCompile_DynamicGVK(t *testing.T) {
 		assert.False(t, hasSchema, "dynamic node publishes no schema (dyn)")
 
 		// The dynamic node depends on the def that feeds its apiVersion.
-		assert.Contains(t, n.Dependencies, "cfg")
+		assert.Contains(t, n.HardDepIDs(), "cfg")
 	})
 
 	t.Run("templated kind also triggers dynamic", func(t *testing.T) {
@@ -1023,7 +1023,7 @@ func TestCompile_DynamicGVK(t *testing.T) {
 		prog, err := newTestCompiler(t).Compile(g)
 		require.NoError(t, err)
 		require.NotNil(t, prog.Nodes["cm"])
-		assert.Contains(t, prog.Nodes["cm"].Dependencies, "res")
+		assert.Contains(t, prog.Nodes["cm"].HardDepIDs(), "res")
 		// res is applied before cm.
 		assert.Less(t, indexOf(prog.TopologicalOrder, "res"), indexOf(prog.TopologicalOrder, "cm"))
 	})

@@ -749,7 +749,7 @@ func TestSimple_SoftDependency(t *testing.T) {
 			}),
 		)
 		rt := compileAndBuild(t, g)
-		assert.Empty(t, rt.Program().Nodes["cm"].Dependencies, "still a soft ref, no hard edge")
+		assert.Empty(t, rt.Program().Nodes["cm"].HardDepIDs(), "still a soft ref, no hard edge")
 
 		cl := fake.NewClientBuilder().WithScheme(newScheme(t)).Build()
 		_, err := NewSimple(cl).Apply(context.Background(), rt, watchrouter.NoopWatcher{})

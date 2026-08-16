@@ -350,7 +350,7 @@ func (ctx *CompilationContext) buildSubgraphNode(n *expv1alpha1.Node, order int)
 	var bubble []string
 	for _, id := range childCaptured {
 		if ctx.frameDepth(id) == 0 {
-			addDependency(node, id)
+			addDependency(node, id, false)
 		} else {
 			bubble = append(bubble, id)
 		}
@@ -484,17 +484,15 @@ func (ctx *CompilationContext) buildDependencyGraph(nodes map[string]*Node, insp
 		}
 		captured = append(captured, capt...)
 		if _, soft := ctx.softDepNodes[n.ID]; soft {
-			// Reclassify every hard resource dependency as soft: the node gets
-			// no DAG edge and imposes no ordering, so it observes resources as
-			// they publish instead of gating the reconcile. Captured ancestor
-			// refs are left untouched (this node has none in practice).
-			for _, d := range n.Dependencies {
-				addSoftDependency(n, d)
+			// Reclassify every resource dependency as soft: the node gets no DAG
+			// edge and imposes no ordering, so it observes resources as they
+			// publish instead of gating the reconcile. Captured ancestor refs are
+			// left untouched (this node has none in practice).
+			for i := range n.Dependencies {
+				n.Dependencies[i].Soft = true
 			}
-			n.Dependencies = nil
 		}
-		reconcileSoftDependencies(n)
-		if err := g.AddDependencies(n.ID, n.Dependencies); err != nil {
+		if err := g.AddDependencies(n.ID, n.HardDepIDs()); err != nil {
 			return nil, nil, fmt.Errorf("node %q: register deps: %w", n.ID, err)
 		}
 	}
@@ -541,10 +539,10 @@ func (ctx *CompilationContext) analyzeVariables(n *Node, inspector *ast.Inspecto
 			v.Kind = variable.ResourceVariableKindDynamic
 		}
 		for _, d := range deps {
-			addDependency(n, d)
+			addDependency(n, d, false)
 		}
 		for _, d := range softDeps {
-			addSoftDependency(n, d)
+			addDependency(n, d, true)
 		}
 		if isIdentityFieldPath(v.Path, n.Namespaced) {
 			for _, it := range iterRefs {
@@ -584,10 +582,10 @@ func (ctx *CompilationContext) analyzeForEach(n *Node, inspector *ast.Inspector)
 		}
 		captured = append(captured, capt...)
 		for _, d := range deps {
-			addDependency(n, d)
+			addDependency(n, d, false)
 		}
 		for _, d := range softDeps {
-			addSoftDependency(n, d)
+			addDependency(n, d, true)
 		}
 	}
 	return captured, nil
@@ -607,13 +605,13 @@ func (ctx *CompilationContext) analyzeIncludeWhen(n *Node, inspector *ast.Inspec
 			if d == n.ID {
 				continue
 			}
-			addDependency(n, d)
+			addDependency(n, d, false)
 		}
 		for _, d := range softDeps {
 			if d == n.ID {
 				continue
 			}
-			addSoftDependency(n, d)
+			addDependency(n, d, true)
 		}
 	}
 	return captured, nil
@@ -745,36 +743,16 @@ func nodeIteratorNames(n *Node) []string {
 	return out
 }
 
-func addDependency(n *Node, dep string) {
-	if !slices.Contains(n.Dependencies, dep) {
-		n.Dependencies = append(n.Dependencies, dep)
-	}
-}
-
-func addSoftDependency(n *Node, dep string) {
-	if !slices.Contains(n.SoftDependencies, dep) {
-		n.SoftDependencies = append(n.SoftDependencies, dep)
-	}
-}
-
-// reconcileSoftDependencies enforces hard-wins across a node's expressions: an
-// id recorded as both a hard Dependency (a hard access somewhere) and a
-// SoftDependency (an optional access elsewhere) is a hard dependency, so it is
-// dropped from SoftDependencies. The DAG is then built from Dependencies alone.
-func reconcileSoftDependencies(n *Node) {
-	if len(n.SoftDependencies) == 0 {
-		return
-	}
-	hard := make(map[string]struct{}, len(n.Dependencies))
-	for _, d := range n.Dependencies {
-		hard[d] = struct{}{}
-	}
-	out := n.SoftDependencies[:0]
-	for _, d := range n.SoftDependencies {
-		if _, ok := hard[d]; ok {
-			continue
+// addDependency records an edge from n to dep. Hard wins: if the edge already
+// exists, it stays hard unless every occurrence so far — and this one — is
+// soft. A new edge takes the given softness. Order is preserved: an existing
+// edge keeps its position, a new one is appended in encounter order.
+func addDependency(n *Node, dep string, soft bool) {
+	for i := range n.Dependencies {
+		if n.Dependencies[i].ID == dep {
+			n.Dependencies[i].Soft = n.Dependencies[i].Soft && soft
+			return
 		}
-		out = append(out, d)
 	}
-	n.SoftDependencies = out
+	n.Dependencies = append(n.Dependencies, Dependency{ID: dep, Soft: soft})
 }

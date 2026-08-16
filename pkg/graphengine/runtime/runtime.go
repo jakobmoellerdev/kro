@@ -105,7 +105,7 @@ func New(prog *compiler.Program, g *expv1alpha1.Graph, opts ...Option) *Runtime 
 	// the Node objects it depends on (not just IDs) so IsIgnored /
 	// CheckReadiness can recurse without a runtime lookup loop.
 	for _, n := range rt.nodes {
-		for _, depID := range n.spec.Dependencies {
+		for _, depID := range n.spec.HardDepIDs() {
 			if dep, ok := rt.byID[depID]; ok {
 				n.deps[depID] = dep
 			}
@@ -118,7 +118,7 @@ func New(prog *compiler.Program, g *expv1alpha1.Graph, opts ...Option) *Runtime 
 	// error that would data-pend the node. Once the target applies, publishScope
 	// overwrites the seed with the live value.
 	for _, n := range rt.nodes {
-		for _, softID := range n.spec.SoftDependencies {
+		for _, softID := range n.spec.SoftDepIDs() {
 			if _, seeded := rt.scope[softID]; !seeded {
 				rt.scope[softID] = map[string]any{}
 			}
@@ -136,7 +136,7 @@ func New(prog *compiler.Program, g *expv1alpha1.Graph, opts ...Option) *Runtime 
 			continue
 		}
 		order := 1
-		for _, depID := range n.spec.Dependencies {
+		for _, depID := range n.spec.HardDepIDs() {
 			dep, ok := rt.byID[depID]
 			if !ok || dep.Kind() == compiler.NodeKindDef {
 				continue

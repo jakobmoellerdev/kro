@@ -113,16 +113,12 @@ type Node struct {
 	// Programs are compiled.
 	Variables []*variable.ResourceField
 
-	// Dependencies are the IDs of other nodes referenced from Variables,
-	// ForEach axes, IncludeWhen, or ReadyWhen. Self-references are filtered.
-	Dependencies []string
-
-	// SoftDependencies are node IDs referenced only through CEL optional
-	// chaining (id.?field / id[?"k"]). They carry no DAG edge and impose no
-	// ordering: the node may run before its target publishes, in which case
-	// the optional expression yields optional.none() and the field is omitted.
-	// An id referenced by any hard access is a Dependency, never here.
-	SoftDependencies []string
+	// Dependencies are the annotated edges to other nodes referenced from
+	// Variables, ForEach axes, IncludeWhen, or ReadyWhen. Self-references are
+	// filtered. Each edge records whether it is soft (see Dependency.Soft).
+	// Order is the encounter order across the node's expressions; the DAG and
+	// topological sort rely on it being stable.
+	Dependencies []Dependency
 
 	// ForEach is the cartesian-product expansion axes. Empty when the node
 	// is not a collection.
@@ -160,6 +156,44 @@ type Node struct {
 // selector externalRefs (Collection).
 func (n *Node) IsCollection() bool {
 	return len(n.ForEach) > 0 || n.Collection
+}
+
+// Dependency is one edge from a node to another node it references.
+//
+// A hard edge (Soft false) is a DAG edge: the referencing node gates on the
+// target and runs only after it publishes. A soft edge (Soft true) records a
+// reference that reaches the target only through CEL optional chaining
+// (id.?field / id[?"k"]); it carries no DAG edge and imposes no ordering. The
+// runtime seeds a soft target with an empty object so the optional access
+// yields optional.none() and the field is omitted, rather than failing the
+// node. An id referenced by any hard access is a hard edge, never soft.
+type Dependency struct {
+	ID   string
+	Soft bool
+}
+
+// HardDepIDs returns the IDs of the node's hard (gating, DAG-edge) edges in
+// encounter order.
+func (n *Node) HardDepIDs() []string {
+	var ids []string
+	for _, d := range n.Dependencies {
+		if !d.Soft {
+			ids = append(ids, d.ID)
+		}
+	}
+	return ids
+}
+
+// SoftDepIDs returns the IDs of the node's soft (non-gating, seeded) edges in
+// encounter order.
+func (n *Node) SoftDepIDs() []string {
+	var ids []string
+	for _, d := range n.Dependencies {
+		if d.Soft {
+			ids = append(ids, d.ID)
+		}
+	}
+	return ids
 }
 
 // Program is the compiled IR for a v1alpha1.Graph. It carries the dependency

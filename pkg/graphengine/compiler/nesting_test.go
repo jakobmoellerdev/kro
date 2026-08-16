@@ -78,7 +78,7 @@ func TestCompile_Nesting(t *testing.T) {
 
 		sub := prog.Nodes["sub"]
 		require.NotNil(t, sub)
-		assert.Contains(t, sub.Dependencies, "cfg", "capture of parent node creates a dependency")
+		assert.Contains(t, sub.HardDepIDs(), "cfg", "capture of parent node creates a dependency")
 		// cfg is applied before the subgraph runs.
 		assert.Less(t, indexOf(prog.TopologicalOrder, "cfg"), indexOf(prog.TopologicalOrder, "sub"))
 	})
@@ -99,7 +99,7 @@ func TestCompile_Nesting(t *testing.T) {
 		)
 		prog, err := newTestCompiler(t).Compile(g)
 		require.NoError(t, err)
-		assert.Contains(t, prog.Nodes["cm"].Dependencies, "sub")
+		assert.Contains(t, prog.Nodes["cm"].HardDepIDs(), "sub")
 		assert.Less(t, indexOf(prog.TopologicalOrder, "sub"), indexOf(prog.TopologicalOrder, "cm"))
 	})
 
@@ -122,7 +122,7 @@ func TestCompile_Nesting(t *testing.T) {
 		)
 		prog, err := newTestCompiler(t).Compile(g)
 		require.NoError(t, err)
-		assert.NotContains(t, prog.Nodes["sub"].Dependencies, "cfg",
+		assert.NotContains(t, prog.Nodes["sub"].HardDepIDs(), "cfg",
 			"shadowed parent cfg is not captured; the child binds its own")
 	})
 
@@ -165,7 +165,7 @@ func TestCompile_Nesting(t *testing.T) {
 		prog, err := newTestCompiler(t).Compile(g)
 		require.NoError(t, err)
 		// The capture bubbles: the outer subgraph depends on root.
-		assert.Contains(t, prog.Nodes["outer"].Dependencies, "root")
+		assert.Contains(t, prog.Nodes["outer"].HardDepIDs(), "root")
 	})
 
 	t.Run("unknown identifier in a subgraph is rejected", func(t *testing.T) {
