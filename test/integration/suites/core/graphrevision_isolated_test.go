@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package graphrevisions_test
+package core_test
 
 import (
 	"fmt"
@@ -36,7 +36,6 @@ import (
 	"github.com/kubernetes-sigs/kro/pkg/controller/resourcegraphdefinition"
 	graphhash "github.com/kubernetes-sigs/kro/pkg/graph/hash"
 	"github.com/kubernetes-sigs/kro/pkg/metadata"
-	"github.com/kubernetes-sigs/kro/pkg/testutil/generator"
 	"github.com/kubernetes-sigs/kro/test/integration/environment"
 )
 
@@ -536,35 +535,7 @@ var _ = Describe("GraphRevision Integration", Serial, func() {
 
 // Helpers — self-contained for this suite.
 
-func configmapRGD(name, kind string) *krov1alpha1.ResourceGraphDefinition {
-	return generator.NewResourceGraphDefinition(name,
-		generator.WithSchema(
-			kind, "v1alpha1",
-			map[string]interface{}{
-				"data": "string | default=hello",
-			},
-			nil,
-		),
-		generator.WithResource("configmap", map[string]interface{}{
-			"apiVersion": "v1",
-			"kind":       "ConfigMap",
-			"metadata": map[string]interface{}{
-				"name": "cm-${schema.metadata.name}",
-			},
-			"data": map[string]interface{}{
-				"key": "${schema.spec.data}",
-			},
-		}, nil, nil),
-	)
-}
 
-func mustComputeSpecHash(spec krov1alpha1.ResourceGraphDefinitionSpec) string {
-	h, err := graphhash.Spec(spec)
-	if err != nil {
-		panic(fmt.Sprintf("failed to compute spec hash: %v", err))
-	}
-	return h
-}
 
 func newIsolatedGraphRevisionEnv(ctx SpecContext, maxGraphRevisions int) *environment.Environment {
 	testEnv, err := environment.New(ctx, environment.ControllerConfig{

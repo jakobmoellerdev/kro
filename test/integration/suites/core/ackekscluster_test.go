@@ -12,12 +12,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package ackekscluster_test
+package core_test
 
 import (
 	"fmt"
 	"strings"
-	"testing"
 	"time"
 
 	. "github.com/onsi/ginkgo/v2"
@@ -31,34 +30,8 @@ import (
 	"k8s.io/apimachinery/pkg/util/rand"
 
 	krov1alpha1 "github.com/kubernetes-sigs/kro/api/v1alpha1"
-	ctrlinstance "github.com/kubernetes-sigs/kro/pkg/controller/instance"
 	"github.com/kubernetes-sigs/kro/pkg/controller/resourcegraphdefinition"
-	"github.com/kubernetes-sigs/kro/test/integration/environment"
 )
-
-var env *environment.Environment
-
-func TestEKSCluster(t *testing.T) {
-	RegisterFailHandler(Fail)
-	BeforeSuite(func() {
-		var err error
-		env, err = environment.New(t.Context(),
-			environment.ControllerConfig{
-				AllowCRDDeletion: true,
-				LogWriter:        GinkgoWriter,
-				ReconcileConfig: ctrlinstance.ReconcileConfig{
-					DefaultRequeueDuration: 3 * time.Second,
-				},
-			},
-		)
-		Expect(err).NotTo(HaveOccurred())
-	})
-	AfterSuite(func() {
-		Expect(env.Stop()).NotTo(HaveOccurred())
-	})
-
-	RunSpecs(t, "EKSCluster Suite")
-}
 
 var _ = Describe("EKSCluster", func() {
 	It("should handle complete lifecycle of ResourceGraphDefinition and Instance", func(ctx SpecContext) {
