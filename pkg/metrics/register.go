@@ -27,18 +27,6 @@ func Register(registry prometheus.Registerer) {
 		ExprEvalTotal,
 		ExprEvalDuration,
 
-		// Runtime
-		NodeEvalTotal,
-		NodeEvalDuration,
-		NodeEvalErrorsTotal,
-		RuntimeCreationTotal,
-		RuntimeCreationDuration,
-		NodeIgnoredCheckTotal,
-		NodeIgnoredTotal,
-		NodeReadyCheckTotal,
-		NodeNotReadyTotal,
-		CollectionSize,
-
 		// Dynamic controller
 		DynReconcileTotal,
 		DynRequeueTotal,
@@ -63,9 +51,6 @@ func Register(registry prometheus.Registerer) {
 		InstanceReconcileDurationSeconds,
 		InstanceReconcileTotal,
 		InstanceReconcileErrorsTotal,
-		InstanceGraphResolutionSuccessTotal,
-		InstanceGraphResolutionFailuresTotal,
-		InstanceGraphResolutionPendingTotal,
 		InstanceConditionCurrentStatusSeconds,
 
 		// RGD controller
