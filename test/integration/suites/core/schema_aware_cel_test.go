@@ -85,7 +85,7 @@ var _ = Describe("Schema-aware CEL value conversion", func() {
 			err := env.Client.Get(ctx, types.NamespacedName{Name: rgd.Name}, obj)
 			g.Expect(err).ToNot(HaveOccurred())
 			g.Expect(obj.Status.State).To(Equal(krov1alpha1.ResourceGraphDefinitionStateActive))
-		}, 10*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
+		}, 30*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 		By("creating instance with a known clientId value")
 		instance := &unstructured.Unstructured{

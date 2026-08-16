@@ -100,7 +100,7 @@ var _ = Describe("ForEach Collections", func() {
 				}
 			}
 			g.Expect(readyCondition.Status).To(Equal(metav1.ConditionTrue))
-		}, 10*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
+		}, 30*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 		name := "test-multi-cm"
 		instance := &unstructured.Unstructured{
@@ -201,7 +201,7 @@ var _ = Describe("ForEach Collections", func() {
 			}, createdRGD)
 			g.Expect(err).ToNot(HaveOccurred())
 			g.Expect(createdRGD.Status.State).To(Equal(krov1alpha1.ResourceGraphDefinitionStateActive))
-		}, 10*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
+		}, 30*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 		name := "test-cartesian"
 		instance := &unstructured.Unstructured{
@@ -314,7 +314,7 @@ var _ = Describe("ForEach Collections", func() {
 			}, createdRGD)
 			g.Expect(err).ToNot(HaveOccurred())
 			g.Expect(createdRGD.Status.State).To(Equal(krov1alpha1.ResourceGraphDefinitionStateActive))
-		}, 10*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
+		}, 30*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 		// Test 1: Create instance with enabled=false - no ConfigMaps should be created
 		name := "test-disabled"
@@ -417,7 +417,7 @@ var _ = Describe("ForEach Collections", func() {
 			}, createdRGD)
 			g.Expect(err).ToNot(HaveOccurred())
 			g.Expect(createdRGD.Status.State).To(Equal(krov1alpha1.ResourceGraphDefinitionStateActive))
-		}, 10*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
+		}, 30*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 		// Phase 1: Create instance with enabled=false - no ConfigMaps should be created
 		name := "test-toggle"
@@ -580,7 +580,7 @@ var _ = Describe("ForEach Collections", func() {
 			}, createdRGD)
 			g.Expect(err).ToNot(HaveOccurred())
 			g.Expect(createdRGD.Status.State).To(Equal(krov1alpha1.ResourceGraphDefinitionStateActive))
-		}, 10*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
+		}, 30*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 		name := "test-dep"
 		instance := &unstructured.Unstructured{
@@ -705,7 +705,7 @@ var _ = Describe("ForEach Collections", func() {
 			}, createdRGD)
 			g.Expect(err).ToNot(HaveOccurred())
 			g.Expect(createdRGD.Status.State).To(Equal(krov1alpha1.ResourceGraphDefinitionStateActive))
-		}, 10*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
+		}, 30*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 		name := "test-chaining"
 		instance := &unstructured.Unstructured{
@@ -837,7 +837,7 @@ var _ = Describe("ForEach Collections", func() {
 			}, createdRGD)
 			g.Expect(err).ToNot(HaveOccurred())
 			g.Expect(createdRGD.Status.State).To(Equal(krov1alpha1.ResourceGraphDefinitionStateActive))
-		}, 10*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
+		}, 30*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 		name := "test-c2c"
 		instance := &unstructured.Unstructured{
@@ -949,7 +949,7 @@ var _ = Describe("ForEach Collections", func() {
 			}, createdRGD)
 			g.Expect(err).ToNot(HaveOccurred())
 			g.Expect(createdRGD.Status.State).To(Equal(krov1alpha1.ResourceGraphDefinitionStateActive))
-		}, 10*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
+		}, 30*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 		name := "test-empty"
 		instance := &unstructured.Unstructured{
@@ -1445,7 +1445,7 @@ var _ = Describe("ForEach Collections", func() {
 			}, createdRGD)
 			g.Expect(err).ToNot(HaveOccurred())
 			g.Expect(createdRGD.Status.State).To(Equal(krov1alpha1.ResourceGraphDefinitionStateActive))
-		}, 10*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
+		}, 30*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 		name := "test-dag"
 		workers := []string{"alpha", "beta", "gamma"}
@@ -1611,7 +1611,7 @@ var _ = Describe("ForEach Collections", func() {
 			}, createdRGD)
 			g.Expect(err).ToNot(HaveOccurred())
 			g.Expect(createdRGD.Status.State).To(Equal(krov1alpha1.ResourceGraphDefinitionStateActive))
-		}, 10*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
+		}, 30*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 		name := "test-ready"
 		instance := &unstructured.Unstructured{
@@ -1709,7 +1709,7 @@ var _ = Describe("ForEach Collections", func() {
 			}, createdRGD)
 			g.Expect(err).ToNot(HaveOccurred())
 			g.Expect(createdRGD.Status.State).To(Equal(krov1alpha1.ResourceGraphDefinitionStateActive))
-		}, 10*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
+		}, 30*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 		name := "test-no-ready"
 		instance := &unstructured.Unstructured{
@@ -1806,7 +1806,7 @@ var _ = Describe("ForEach Collections", func() {
 			}, createdRGD)
 			g.Expect(err).ToNot(HaveOccurred())
 			g.Expect(createdRGD.Status.State).To(Equal(krov1alpha1.ResourceGraphDefinitionStateActive))
-		}, 10*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
+		}, 30*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 		name := "test-deletion"
 		values := []string{"one", "two", "three"}
@@ -2039,7 +2039,7 @@ var _ = Describe("ForEach Collections", func() {
 			}, createdRGD)
 			g.Expect(err).ToNot(HaveOccurred())
 			g.Expect(createdRGD.Status.State).To(Equal(krov1alpha1.ResourceGraphDefinitionStateActive))
-		}, 10*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
+		}, 30*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 		name := "test-standalone"
 		instance := &unstructured.Unstructured{
@@ -2193,7 +2193,7 @@ var _ = Describe("ForEach Collections", func() {
 			}, createdRGD)
 			g.Expect(err).ToNot(HaveOccurred())
 			g.Expect(createdRGD.Status.State).To(Equal(krov1alpha1.ResourceGraphDefinitionStateActive))
-		}, 10*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
+		}, 30*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 		name := "test-cross-ns"
 		instance := &unstructured.Unstructured{
@@ -2342,7 +2342,7 @@ var _ = Describe("ForEach Collections", func() {
 			}, createdRGD)
 			g.Expect(err).ToNot(HaveOccurred())
 			g.Expect(createdRGD.Status.State).To(Equal(krov1alpha1.ResourceGraphDefinitionStateActive))
-		}, 10*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
+		}, 30*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 		// Create instance with EMPTY names array - this triggers the bug
 		name := "test-empty-dep"

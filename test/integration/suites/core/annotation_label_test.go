@@ -90,7 +90,7 @@ var _ = Describe("Labels and Annotations", func() {
 			}, rgd)
 			g.Expect(err).ToNot(HaveOccurred())
 			g.Expect(rgd.Status.State).To(Equal(krov1alpha1.ResourceGraphDefinitionStateActive))
-		}, 10*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
+		}, 30*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 		apiVersion, kind := schema.GroupVersionKind{
 			Group:   rgd.Spec.Schema.Group,

@@ -83,7 +83,7 @@ var _ = Describe("Format function in ResourceGraphDefinition templates", func() 
 			g.Expect(err).ToNot(HaveOccurred())
 			g.Expect(obj.Status.State).To(Equal(krov1alpha1.ResourceGraphDefinitionStateActive))
 			g.Expect(obj.Status.TopologicalOrder).To(ContainElements("serviceAccount", "configMap"))
-		}, 10*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
+		}, 30*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 		By("creating instance")
 

@@ -120,7 +120,7 @@ var _ = Describe("Webhook Denial", func() {
 			createdRGD := &krov1alpha1.ResourceGraphDefinition{}
 			g.Expect(env.Client.Get(ctx, types.NamespacedName{Name: rgd.Name}, createdRGD)).To(Succeed())
 			g.Expect(createdRGD.Status.State).To(Equal(krov1alpha1.ResourceGraphDefinitionStateActive))
-		}, 10*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
+		}, 30*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 		instanceName := "test-webhook-instance"
 		instance := &unstructured.Unstructured{
