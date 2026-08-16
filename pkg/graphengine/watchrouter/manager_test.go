@@ -44,7 +44,7 @@ func newTestManager(t *testing.T, onEvent EventHandler) (*Manager, *fakeInformer
 	reg := &fakeInformerRegistry{informers: make(map[schema.GroupVersionResource]*fakeInformer)}
 	wm := NewManager(nil, 0, onEvent, logr.Discard())
 	wm.SyncTimeout = 500 * time.Millisecond
-	wm.createInformer = reg.create
+	wm.SetInformerFactory(reg.create)
 	t.Cleanup(wm.Shutdown)
 	return wm, reg
 }
@@ -226,9 +226,9 @@ func TestManagerSyncTimeout(t *testing.T) {
 	wm.SyncTimeout = 50 * time.Millisecond
 
 	never := &neverSyncInformer{}
-	wm.createInformer = func(_ schema.GroupVersionResource) cache.SharedIndexInformer {
+	wm.SetInformerFactory(func(_ schema.GroupVersionResource) cache.SharedIndexInformer {
 		return never
-	}
+	})
 	t.Cleanup(wm.Shutdown)
 
 	err := wm.EnsureWatch(gvrA, "owner")

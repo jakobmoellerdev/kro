@@ -80,7 +80,7 @@ func TestManagerGetInformer(t *testing.T) {
 func TestManagerSyncTimeoutDefault(t *testing.T) {
 	wm := NewManager(nil, 0, func(Event) {}, logr.Discard())
 	reg := &fakeInformerRegistry{informers: make(map[schema.GroupVersionResource]*fakeInformer)}
-	wm.createInformer = reg.create
+	wm.SetInformerFactory(reg.create)
 	t.Cleanup(wm.Shutdown)
 	// SyncTimeout=0 means defaultSyncTimeout (30s) applies. The fake
 	// informer synces immediately so we get back from EnsureWatch
@@ -184,9 +184,9 @@ func TestNoopWatcherDoneStatements(t *testing.T) {
 func TestManagerNewWatchEventHandlerError(t *testing.T) {
 	wm := NewManager(nil, 0, func(Event) {}, logr.Discard())
 	wm.SyncTimeout = 200 * time.Millisecond
-	wm.createInformer = func(_ schema.GroupVersionResource) cache.SharedIndexInformer {
+	wm.SetInformerFactory(func(_ schema.GroupVersionResource) cache.SharedIndexInformer {
 		return &erroringHandlerInformer{fakeInformer: *newFakeInformer()}
-	}
+	})
 	t.Cleanup(wm.Shutdown)
 	// EnsureWatch should still succeed: the error path inside newWatch
 	// only logs and the informer otherwise behaves.

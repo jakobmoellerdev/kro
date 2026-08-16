@@ -40,9 +40,9 @@ func newTestDC(t *testing.T) (*Router, *fakeInformerRegistry) {
 	}
 	dc.watches = NewManager(nil, 0, dc.routeEvent, logr.Discard())
 	dc.watches.SyncTimeout = 500 * time.Millisecond
-	dc.watches.createInformer = func(gvr schema.GroupVersionResource) cache.SharedIndexInformer {
+	dc.watches.SetInformerFactory(func(gvr schema.GroupVersionResource) cache.SharedIndexInformer {
 		return reg.create(gvr)
-	}
+	})
 	dc.coordinator = NewCoordinator(dc.watches, dc.enqueue, logr.Discard())
 	t.Cleanup(dc.watches.Shutdown)
 	return dc, reg
