@@ -58,7 +58,7 @@ var _ = Describe("GraphRevision Conditions", func() {
 				message: "",
 			})
 			g.Expect(fresh.Status.TopologicalOrder).To(Equal([]string{"configmap"}))
-		}, 20*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+		}, 20*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 	})
 
 	It("should report the exact failure condition contract for an invalid GraphRevision snapshot", func(ctx SpecContext) {
@@ -92,6 +92,6 @@ var _ = Describe("GraphRevision Conditions", func() {
 			})
 			g.Expect(fresh.Status.TopologicalOrder).To(BeEmpty())
 			g.Expect(fresh.Status.Resources).To(BeEmpty())
-		}, 20*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+		}, 20*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 	})
 })

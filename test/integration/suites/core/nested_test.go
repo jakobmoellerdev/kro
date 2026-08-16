@@ -61,7 +61,7 @@ var _ = Describe("Nested ResourceGraphDefinition", func() {
 			}, rg)
 			g.Expect(err).ToNot(HaveOccurred())
 			g.Expect(rg.Status.State).To(Equal(krov1alpha1.ResourceGraphDefinitionStateActive))
-		}, 30*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+		}, 30*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 		// Create instance
 		instance := genInstance(ns.Name, "test-string", "string", "10")
@@ -79,7 +79,7 @@ var _ = Describe("Nested ResourceGraphDefinition", func() {
 			g.Expect(err).ToNot(HaveOccurred())
 			g.Expect(found).To(BeTrue())
 			g.Expect(instanceState).To(Equal("ACTIVE"))
-		}, 30*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+		}, 30*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 		// Wait for nested ResourceGraphDefinition to be created and ready
 		var nestedRG krov1alpha1.ResourceGraphDefinition
@@ -89,7 +89,7 @@ var _ = Describe("Nested ResourceGraphDefinition", func() {
 			}, &nestedRG)
 			g.Expect(err).ToNot(HaveOccurred())
 			g.Expect(nestedRG.Status.State).To(Equal(krov1alpha1.ResourceGraphDefinitionStateActive))
-		}, 30*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+		}, 30*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 		// Delete instance
 		Expect(env.Client.Delete(ctx, instance)).To(Succeed())
@@ -100,7 +100,7 @@ var _ = Describe("Nested ResourceGraphDefinition", func() {
 				Name: "rg-nested-string",
 			}, &nestedRG)
 			g.Expect(err).To(MatchError(errors.IsNotFound, "nested RGD should be deleted"))
-		}, 30*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+		}, 30*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 		// Delete parent ResourceGraphDefinition
 		Expect(env.Client.Delete(ctx, rg)).To(Succeed())
@@ -119,7 +119,7 @@ var _ = Describe("Nested ResourceGraphDefinition", func() {
 			}, rg)
 			g.Expect(err).ToNot(HaveOccurred())
 			g.Expect(rg.Status.State).To(Equal(krov1alpha1.ResourceGraphDefinitionStateActive))
-		}, 30*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+		}, 30*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 		// Create instances with different types
 		testCases := []struct {
@@ -149,7 +149,7 @@ var _ = Describe("Nested ResourceGraphDefinition", func() {
 				}, &nestedRG)
 				g.Expect(err).ToNot(HaveOccurred())
 				g.Expect(nestedRG.Status.State).To(Equal(krov1alpha1.ResourceGraphDefinitionStateActive))
-			}, 30*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+			}, 30*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 			// Verify parent instance status
 			Eventually(func(g Gomega, ctx SpecContext) {
@@ -165,7 +165,7 @@ var _ = Describe("Nested ResourceGraphDefinition", func() {
 				g.Expect(instanceStatus).ToNot(BeNil())
 				g.Expect(instanceStatus).To(HaveKeyWithValue("state", "ACTIVE"),
 					fmt.Sprintf("instance status should have state field, status was %v", instanceStatus))
-			}, 30*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+			}, 30*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 		}
 
 		// Delete all instances
@@ -184,7 +184,7 @@ var _ = Describe("Nested ResourceGraphDefinition", func() {
 					Name: fmt.Sprintf("rg-nested-%s", t.typeVal),
 				}, &nestedRG)
 				g.Expect(err).To(MatchError(errors.IsNotFound, "nested RGD should be deleted"))
-			}, 30*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+			}, 30*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 		}
 
 		// Delete parent ResourceGraphDefinition
@@ -197,7 +197,7 @@ var _ = Describe("Nested ResourceGraphDefinition", func() {
 				Name: rg.Name,
 			}, &krov1alpha1.ResourceGraphDefinition{})
 			g.Expect(err).To(MatchError(errors.IsNotFound, "parent RGD should be deleted"))
-		}, 30*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+		}, 30*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 	})
 })
 
