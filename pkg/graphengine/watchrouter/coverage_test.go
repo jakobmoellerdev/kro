@@ -30,10 +30,13 @@ import (
 	"github.com/stretchr/testify/require"
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+
 	"k8s.io/client-go/metadata"
 	"k8s.io/client-go/metadata/fake"
 	"k8s.io/client-go/tools/cache"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+
+	"github.com/kubernetes-sigs/kro/pkg/watch"
 )
 
 // TestNewRouterProductionConstructor exercises NewRouter with a real
@@ -78,7 +81,7 @@ func TestManagerGetInformer(t *testing.T) {
 // manager with SyncTimeout=0 and observe a successful EnsureWatch
 // (which uses the fallback path internally).
 func TestManagerSyncTimeoutDefault(t *testing.T) {
-	wm := NewManager(nil, 0, func(Event) {}, logr.Discard())
+	wm := watch.NewManager(nil, 0, func(watch.Event) {}, logr.Discard())
 	reg := &fakeInformerRegistry{informers: make(map[schema.GroupVersionResource]*fakeInformer)}
 	wm.SetInformerFactory(reg.create)
 	t.Cleanup(wm.Shutdown)
@@ -182,7 +185,7 @@ func TestNoopWatcherDoneStatements(t *testing.T) {
 // informer returns an error from AddEventHandler — using a custom
 // fake that errors on registration.
 func TestManagerNewWatchEventHandlerError(t *testing.T) {
-	wm := NewManager(nil, 0, func(Event) {}, logr.Discard())
+	wm := watch.NewManager(nil, 0, func(watch.Event) {}, logr.Discard())
 	wm.SyncTimeout = 200 * time.Millisecond
 	wm.SetInformerFactory(func(_ schema.GroupVersionResource) cache.SharedIndexInformer {
 		return &erroringHandlerInformer{fakeInformer: *newFakeInformer()}
@@ -215,7 +218,7 @@ func TestManagerDefaultCreateInformer(t *testing.T) {
 	scheme := fake.NewTestScheme()
 	mc := fake.NewSimpleMetadataClient(scheme)
 
-	wm := NewManager(mc, 0, func(Event) {}, logr.Discard())
+	wm := watch.NewManager(mc, 0, func(watch.Event) {}, logr.Discard())
 	wm.SyncTimeout = 2 * time.Second
 	t.Cleanup(wm.Shutdown)
 
@@ -253,7 +256,7 @@ func TestCoordinatorNoSuchKey(t *testing.T) {
 // exercise the error-skip branch in eventHandlerFuncs.
 func TestEventHandlerFuncsAccessorError(t *testing.T) {
 	var seen int
-	handler := func(Event) { seen++ }
+	handler := func(watch.Event) { seen++ }
 	wm, reg := newTestManager(t, handler)
 	require.NoError(t, wm.EnsureWatch(gvrA, "owner"))
 	inf := reg.get(gvrA)

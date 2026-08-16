@@ -47,6 +47,8 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/handler"
 	"sigs.k8s.io/controller-runtime/pkg/manager"
 	"sigs.k8s.io/controller-runtime/pkg/source"
+
+	"github.com/kubernetes-sigs/kro/pkg/watch"
 )
 
 // Config tunes the Router. Defaults are sensible for typical
@@ -73,7 +75,7 @@ type Config struct {
 type Router struct {
 	log logr.Logger
 
-	watches     *Manager
+	watches     *watch.Manager
 	coordinator *Coordinator
 
 	events chan event.GenericEvent
@@ -94,7 +96,7 @@ func NewRouter(log logr.Logger, cfg Config, metaClient metadata.Interface) *Rout
 		events: make(chan event.GenericEvent, bufSize),
 	}
 
-	dc.watches = NewManager(metaClient, cfg.ResyncPeriod, dc.routeEvent, dc.log)
+	dc.watches = watch.NewManager(metaClient, cfg.ResyncPeriod, dc.routeEvent, dc.log)
 	if cfg.SyncTimeout > 0 {
 		dc.watches.SyncTimeout = cfg.SyncTimeout
 	}
@@ -151,7 +153,7 @@ var _ manager.LeaderElectionRunnable = (*Router)(nil)
 
 // routeEvent is the EventHandler given to Manager. It forwards to
 // the coordinator's RouteEvent for indexing + enqueue.
-func (dc *Router) routeEvent(e Event) {
+func (dc *Router) routeEvent(e watch.Event) {
 	dc.coordinator.RouteEvent(e)
 }
 
@@ -177,7 +179,7 @@ func (dc *Router) enqueue(key client.ObjectKey) {
 }
 
 // Manager returns the underlying Manager (tests + metrics).
-func (dc *Router) Manager() *Manager { return dc.watches }
+func (dc *Router) Manager() *watch.Manager { return dc.watches }
 
 // String reports the count of active watches and tracked graphs, useful
 // in logs.

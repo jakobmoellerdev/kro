@@ -22,6 +22,8 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+
+	"github.com/kubernetes-sigs/kro/pkg/watch"
 )
 
 // Watcher is the per-Graph handle a reconciler uses to declare which
@@ -91,7 +93,7 @@ type collectionEntry struct {
 type Coordinator struct {
 	mu sync.RWMutex
 
-	watches *Manager
+	watches *watch.Manager
 	enqueue EnqueueFunc
 	log     logr.Logger
 
@@ -104,7 +106,7 @@ type Coordinator struct {
 
 // NewCoordinator wires a coordinator to a Manager and an
 // enqueue callback.
-func NewCoordinator(watches *Manager, enqueue EnqueueFunc, log logr.Logger) *Coordinator {
+func NewCoordinator(watches *watch.Manager, enqueue EnqueueFunc, log logr.Logger) *Coordinator {
 	return &Coordinator{
 		watches:         watches,
 		enqueue:         enqueue,
@@ -125,7 +127,7 @@ func (c *Coordinator) ForGraph(key client.ObjectKey) Watcher {
 // whose declared watch set covers it. Both current labels and old labels
 // are considered for collection watches so that an object losing its
 // label match still triggers reconciliation.
-func (c *Coordinator) RouteEvent(event Event) {
+func (c *Coordinator) RouteEvent(event watch.Event) {
 	c.mu.RLock()
 	matched := make(map[client.ObjectKey]struct{})
 
