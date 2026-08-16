@@ -94,7 +94,7 @@ var _ = Describe("GraphRevision Lifecycle", func() {
 			ready := findGRCondition(currentGRs[0].Status.Conditions, krov1alpha1.ConditionType(apis.ConditionReady))
 			g.Expect(ready).ToNot(BeNil())
 			g.Expect(ready.Status).To(Equal(metav1.ConditionTrue))
-		}, 20*time.Second, 500*time.Millisecond).WithContext(ctx).Should(Succeed())
+		}, 7*time.Second, 500*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 		gr := grs[0]
 

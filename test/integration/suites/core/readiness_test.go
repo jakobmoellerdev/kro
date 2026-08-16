@@ -398,7 +398,8 @@ var _ = Describe("Readiness", func() {
 			g.Expect(err).ToNot(HaveOccurred())
 		}, 20*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
-		// Verify instance state is IN_PROGRESS consistently for 30seconds
+		// Verify instance state is IN_PROGRESS consistently for a window that
+		// covers at least one DefaultRequeueDuration (5s) cycle.
 		Consistently(func(g Gomega, ctx SpecContext) {
 			err := env.Client.Get(ctx, types.NamespacedName{
 				Name:      instanceName,
@@ -409,7 +410,7 @@ var _ = Describe("Readiness", func() {
 			g.Expect(err).ToNot(HaveOccurred())
 			g.Expect(found).To(BeTrue())
 			g.Expect(status).To(Equal("IN_PROGRESS"))
-		}, 30*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
+		}, 7*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 		// Patch job completionTime to simulate job completion
 		now := metav1.Now()
