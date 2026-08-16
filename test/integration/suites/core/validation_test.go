@@ -125,7 +125,7 @@ var _ = Describe("Validation", func() {
 				}, rgd)
 				g.Expect(err).ToNot(HaveOccurred())
 				g.Expect(rgd.Status.State).To(Equal(krov1alpha1.ResourceGraphDefinitionStateActive))
-			}, 10*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+			}, 10*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 			Expect(env.Client.Delete(ctx, rgd)).To(Succeed())
 		})
@@ -208,7 +208,7 @@ var _ = Describe("Validation", func() {
 				}, rgd)
 				g.Expect(err).ToNot(HaveOccurred())
 				g.Expect(rgd.Status.State).To(Equal(krov1alpha1.ResourceGraphDefinitionStateActive))
-			}, 10*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+			}, 10*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 			Expect(env.Client.Delete(ctx, rgd)).To(Succeed())
 		})
@@ -264,7 +264,7 @@ var _ = Describe("Validation", func() {
 					}, rgd)
 					g.Expect(err).ToNot(HaveOccurred())
 					g.Expect(rgd.Status.State).To(Equal(krov1alpha1.ResourceGraphDefinitionStateInactive))
-				}, 10*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+				}, 10*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 				Expect(env.Client.Delete(ctx, rgd)).To(Succeed())
 			}
@@ -330,7 +330,7 @@ var _ = Describe("Validation", func() {
 					}, rgd)
 					g.Expect(err).ToNot(HaveOccurred())
 					g.Expect(rgd.Status.State).To(Equal(krov1alpha1.ResourceGraphDefinitionStateActive))
-				}, 10*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+				}, 10*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 				Expect(env.Client.Delete(ctx, rgd)).To(Succeed())
 			}
@@ -391,7 +391,7 @@ var _ = Describe("Validation", func() {
 				g.Expect(err).ToNot(HaveOccurred())
 				g.Expect(rgd.Status.State).To(Equal(krov1alpha1.ResourceGraphDefinitionStateInactive))
 				g.Expect(rgd.Status.TopologicalOrder).To(BeEmpty())
-			}, 10*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+			}, 10*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 			Expect(env.Client.Delete(ctx, rgd)).To(Succeed())
 		})
@@ -432,7 +432,7 @@ var _ = Describe("Validation", func() {
 				}, rgd)
 				g.Expect(err).ToNot(HaveOccurred())
 				g.Expect(rgd.Status.State).To(Equal(krov1alpha1.ResourceGraphDefinitionStateActive))
-			}, 10*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+			}, 10*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 			Expect(env.Client.Delete(ctx, rgd)).To(Succeed())
 		})
@@ -563,5 +563,5 @@ func expectRGDInactiveWithError(
 		g.Expect(condition).ToNot(BeNil())
 		g.Expect(condition.Status).To(Equal(metav1.ConditionFalse))
 		g.Expect(*condition.Message).To(ContainSubstring(expectedErrorSubstring))
-	}, 10*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+	}, 10*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 }

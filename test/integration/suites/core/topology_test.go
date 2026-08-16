@@ -173,7 +173,7 @@ var _ = Describe("Topology", func() {
 				"subnetB",
 				"cluster",
 			}))
-		}, 10*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+		}, 10*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 	})
 
 	It("should detect cyclic dependencies in AWS resource definitions", func(ctx SpecContext) {
@@ -233,6 +233,6 @@ var _ = Describe("Topology", func() {
 			g.Expect(graphCondition.Status).To(Equal(metav1.ConditionFalse))
 			g.Expect(*graphCondition.Message).To(ContainSubstring("graph contains a cycle"))
 			g.Expect(rgd.Status.State).To(Equal(krov1alpha1.ResourceGraphDefinitionStateInactive))
-		}, 10*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+		}, 10*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 	})
 })

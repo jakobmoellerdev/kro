@@ -134,7 +134,7 @@ var _ = Describe("Structural Type Compatibility", func() {
 				}, rgd)
 				g.Expect(err).ToNot(HaveOccurred())
 				g.Expect(rgd.Status.State).To(Equal(krov1alpha1.ResourceGraphDefinitionStateActive))
-			}, 30*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+			}, 30*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 			Expect(env.Client.Delete(ctx, rgd)).To(Succeed())
 		})
@@ -191,7 +191,7 @@ var _ = Describe("Structural Type Compatibility", func() {
 					ContainSubstring("kind mismatch"),
 					ContainSubstring("exists in output but not in expected type"),
 				))
-			}, 30*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+			}, 30*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 			Expect(env.Client.Delete(ctx, rgd)).To(Succeed())
 		})

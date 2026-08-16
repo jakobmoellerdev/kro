@@ -149,7 +149,7 @@ var _ = Describe("Instance Conditions", func() {
 			// Validate lastTransitionTime is set
 			g.Expect(readyCondition["lastTransitionTime"]).ToNot(BeNil(), "Ready lastTransitionTime should be set")
 
-		}, 30*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+		}, 30*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 		// Verify the ConfigMap was created
 		configMap := &corev1.ConfigMap{}
@@ -160,7 +160,7 @@ var _ = Describe("Instance Conditions", func() {
 			}, configMap)
 			g.Expect(err).ToNot(HaveOccurred())
 			g.Expect(configMap.Data["config"]).To(Equal("test-data"))
-		}, 10*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+		}, 10*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 	})
 
 	It("should show proper condition progression during deletion", func(ctx SpecContext) {
@@ -202,7 +202,7 @@ var _ = Describe("Instance Conditions", func() {
 			}
 			g.Expect(readyCondition).ToNot(BeNil())
 			g.Expect(readyCondition.Status).To(Equal(metav1.ConditionTrue))
-		}, 30*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+		}, 30*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 		// Create instance
 		instance := &unstructured.Unstructured{
@@ -243,7 +243,7 @@ var _ = Describe("Instance Conditions", func() {
 			}
 			g.Expect(readyCondition).ToNot(BeNil())
 			g.Expect(readyCondition["status"]).To(Equal("True"))
-		}, 30*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+		}, 30*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 		// Delete the instance
 		Expect(env.Client.Delete(ctx, instance)).To(Succeed())
@@ -269,7 +269,7 @@ var _ = Describe("Instance Conditions", func() {
 					}
 				}
 			}
-		}, 20*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+		}, 20*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 	})
 
 	It("should surface a failure condition when a resource is invalid", func(ctx SpecContext) {

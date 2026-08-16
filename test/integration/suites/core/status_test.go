@@ -93,7 +93,7 @@ var _ = Describe("Status", func() {
 				g.Expect(cond.Status).To(Equal(metav1.ConditionTrue))
 			}
 
-		}, 10*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+		}, 10*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 	})
 
 	It("should reflect failure conditions when definition is invalid", func(ctx SpecContext) {
@@ -133,7 +133,7 @@ var _ = Describe("Status", func() {
 			g.Expect(crdCondition).ToNot(BeNil())
 			g.Expect(crdCondition.Status).To(Equal(metav1.ConditionFalse))
 			g.Expect(*crdCondition.Message).To(ContainSubstring("failed to build resourcegraphdefinition"))
-		}, 10*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+		}, 10*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 	})
 
 	It("should interpolate string templates in instance status", func(ctx SpecContext) {
@@ -173,7 +173,7 @@ var _ = Describe("Status", func() {
 			err := env.Client.Get(ctx, types.NamespacedName{Name: rgd.Name}, rgd)
 			g.Expect(err).ToNot(HaveOccurred())
 			g.Expect(rgd.Status.State).To(Equal(krov1alpha1.ResourceGraphDefinitionStateActive))
-		}, 10*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+		}, 10*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 		// Create instance
 		instanceName := "test-interpolation"
@@ -210,7 +210,7 @@ var _ = Describe("Status", func() {
 			// Expected format: "my-configmap-in-<namespace>"
 			g.Expect(configmapRef).To(Equal(fmt.Sprintf("my-configmap-in-%s", namespace)),
 				"status.configmapRef should be properly interpolated from string template")
-		}, 30*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+		}, 30*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 	})
 
 	It("should only show status fields when all referenced resources are available", func(ctx SpecContext) {
@@ -280,7 +280,7 @@ var _ = Describe("Status", func() {
 			err := env.Client.Get(ctx, types.NamespacedName{Name: rgd.Name}, rgd)
 			g.Expect(err).ToNot(HaveOccurred())
 			g.Expect(rgd.Status.State).To(Equal(krov1alpha1.ResourceGraphDefinitionStateActive))
-		}, 10*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+		}, 10*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 		// Create instance with all ConfigMaps disabled initially
 		instanceName := "test-partial"
@@ -341,7 +341,7 @@ var _ = Describe("Status", func() {
 			g.Expect(hasField1).To(BeFalse(), "field1 should not exist when cm1 is disabled")
 			g.Expect(hasField2).To(BeFalse(), "field2 should not exist when cm1/cm2 are disabled")
 			g.Expect(hasField3).To(BeFalse(), "field3 should not exist when all cms are disabled")
-		}, 10*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+		}, 10*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 		// State 2: Enable cm1 only - field1 should appear
 		updateSpec(ctx, func(spec map[string]interface{}) {
@@ -357,7 +357,7 @@ var _ = Describe("Status", func() {
 			g.Expect(field1).To(Equal("one"))
 			g.Expect(hasField2).To(BeFalse(), "field2 should not exist when cm2 is disabled")
 			g.Expect(hasField3).To(BeFalse(), "field3 should not exist when cm2/cm3 are disabled")
-		}, 30*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+		}, 30*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 		// State 3: Enable cm1 and cm2 - field1 and field2 should appear
 		updateSpec(ctx, func(spec map[string]interface{}) {
@@ -374,7 +374,7 @@ var _ = Describe("Status", func() {
 			g.Expect(hasField2).To(BeTrue(), "field2 should exist when cm1 and cm2 are enabled")
 			g.Expect(field2).To(Equal("one-two"))
 			g.Expect(hasField3).To(BeFalse(), "field3 should not exist when cm3 is disabled")
-		}, 30*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+		}, 30*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 		// State 4: Enable all - all fields should appear
 		updateSpec(ctx, func(spec map[string]interface{}) {
@@ -392,7 +392,7 @@ var _ = Describe("Status", func() {
 			g.Expect(field2).To(Equal("one-two"))
 			g.Expect(hasField3).To(BeTrue(), "field3 should exist when all cms are enabled")
 			g.Expect(field3).To(Equal("one-two-three"))
-		}, 30*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+		}, 30*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 		// State 5: Disable cm2 - field2 and field3 should disappear, field1 remains
 		updateSpec(ctx, func(spec map[string]interface{}) {
@@ -408,6 +408,6 @@ var _ = Describe("Status", func() {
 			g.Expect(field1).To(Equal("one"))
 			g.Expect(hasField2).To(BeFalse(), "field2 should disappear when cm2 is disabled")
 			g.Expect(hasField3).To(BeFalse(), "field3 should disappear when cm2 is disabled")
-		}, 30*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+		}, 30*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 	})
 })

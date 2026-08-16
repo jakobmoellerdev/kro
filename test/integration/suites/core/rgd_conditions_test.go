@@ -171,7 +171,7 @@ var _ = Describe("RGD Conditions", func() {
 			fresh.Spec = *invalidRGD.Spec.DeepCopy()
 			err = env.Client.Update(ctx, fresh)
 			g.Expect(err).ToNot(HaveOccurred())
-		}, 10*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+		}, 10*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 		expectExactRGDConditions(ctx, rgdName, time.Second, exactRGDExpectation{
 			state:      krov1alpha1.ResourceGraphDefinitionStateInactive,
@@ -209,7 +209,7 @@ var _ = Describe("RGD Conditions", func() {
 
 		Consistently(func(g Gomega) {
 			g.Expect(listGraphRevisions(ctx, rgdName)).To(HaveLen(1))
-		}, 5*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+		}, 5*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 	})
 
 	It("should surface unknown serving conditions while terminating revisions settle", func(ctx SpecContext) {
@@ -226,7 +226,7 @@ var _ = Describe("RGD Conditions", func() {
 			grs := listGraphRevisions(ctx, rgdName)
 			g.Expect(grs).To(HaveLen(1))
 			grName = grs[0].Name
-		}, 10*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+		}, 10*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 		DeferCleanup(func(ctx SpecContext) {
 			gr := &internalv1alpha1.GraphRevision{}
