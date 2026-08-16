@@ -685,3 +685,78 @@ func TestSimple_Apply_Nesting(t *testing.T) {
 		assert.Equal(t, "outer/mid/cm", res.Applied[0].NodeID, "identity qualified by the full frame path")
 	})
 }
+
+// TestSimple_SoftDependency exercises optional-chaining references, which are
+// non-gating: the referrer is applied whether or not its target has published.
+// When the target is absent the optional expression yields optional.none();
+// paired with orValue(omit()) the field is dropped from the rendered object.
+func TestSimple_SoftDependency(t *testing.T) {
+	t.Parallel()
+
+	getCM := func(t *testing.T, c client.Client, name string) *unstructured.Unstructured {
+		t.Helper()
+		cm := &unstructured.Unstructured{}
+		cm.SetGroupVersionKind(configMapGVK)
+		require.NoError(t, c.Get(context.Background(),
+			types.NamespacedName{Namespace: "default", Name: name}, cm))
+		return cm
+	}
+
+	t.Run("soft ref to a later node applies without gating and omits the field", func(t *testing.T) {
+		t.Parallel()
+		// "cm" is declared before its optional target "later"; the soft ref
+		// adds no edge, so "cm" resolves first while "later" is unpublished.
+		g := generator.NewGraph("g",
+			generator.WithNamespace("default"),
+			generator.WithTemplate("cm", map[string]any{
+				"apiVersion": "v1", "kind": "ConfigMap",
+				"metadata": map[string]any{"name": "cm"},
+				"data": map[string]any{
+					"always":   "present",
+					"optional": "${later.?field.orValue(omit())}",
+				},
+			}),
+			generator.WithDef("later", map[string]any{"field": "hello"}),
+		)
+		rt := compileAndBuild(t, g)
+		assert.Equal(t, []string{"cm", "later"}, rt.Program().TopologicalOrder,
+			"soft ref must not force the target before the referrer")
+
+		cl := fake.NewClientBuilder().WithScheme(newScheme(t)).Build()
+		_, err := NewSimple(cl).Apply(context.Background(), rt, watchrouter.NoopWatcher{})
+		require.NoError(t, err, "soft ref must not gate or data-pend")
+
+		cm := getCM(t, cl, "cm")
+		data, _, _ := unstructured.NestedMap(cm.Object, "data")
+		assert.Equal(t, "present", data["always"])
+		_, hasOptional := data["optional"]
+		assert.False(t, hasOptional, "optional field must be omitted while target is unpublished")
+	})
+
+	t.Run("soft ref resolves the value once the target has published", func(t *testing.T) {
+		t.Parallel()
+		// "later" is declared first, so it publishes before "cm" resolves and
+		// the optional expression sees the real value.
+		g := generator.NewGraph("g",
+			generator.WithNamespace("default"),
+			generator.WithDef("later", map[string]any{"field": "hello"}),
+			generator.WithTemplate("cm", map[string]any{
+				"apiVersion": "v1", "kind": "ConfigMap",
+				"metadata": map[string]any{"name": "cm"},
+				"data": map[string]any{
+					"optional": "${later.?field.orValue(omit())}",
+				},
+			}),
+		)
+		rt := compileAndBuild(t, g)
+		assert.Empty(t, rt.Program().Nodes["cm"].Dependencies, "still a soft ref, no hard edge")
+
+		cl := fake.NewClientBuilder().WithScheme(newScheme(t)).Build()
+		_, err := NewSimple(cl).Apply(context.Background(), rt, watchrouter.NoopWatcher{})
+		require.NoError(t, err)
+
+		cm := getCM(t, cl, "cm")
+		data, _, _ := unstructured.NestedMap(cm.Object, "data")
+		assert.Equal(t, "hello", data["optional"], "value present once target published")
+	})
+}

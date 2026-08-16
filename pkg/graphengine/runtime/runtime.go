@@ -111,6 +111,19 @@ func New(prog *compiler.Program, g *expv1alpha1.Graph, opts ...Option) *Runtime 
 			}
 		}
 	}
+	// Soft dependencies carry no edge and no ordering, so a soft-referencing
+	// node can resolve before its target publishes. Seed each soft target with
+	// an empty object so an optional access (id.?field / id[?"k"]) yields
+	// optional.none() — the field is omitted — rather than a "no such attribute"
+	// error that would data-pend the node. Once the target applies, publishScope
+	// overwrites the seed with the live value.
+	for _, n := range rt.nodes {
+		for _, softID := range n.spec.SoftDependencies {
+			if _, seeded := rt.scope[softID]; !seeded {
+				rt.scope[softID] = map[string]any{}
+			}
+		}
+	}
 	// Compute one-based reverse-topological apply orders. Nodes are
 	// already in topological order (dependencies precede dependents), so a
 	// single forward pass yields order(n) = 1 + max(order(deps)); leaves = 1.

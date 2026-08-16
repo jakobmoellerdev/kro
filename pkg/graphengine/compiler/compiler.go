@@ -445,6 +445,7 @@ func (ctx *CompilationContext) buildDependencyGraph(nodes map[string]*Node, insp
 			return nil, nil, fmt.Errorf("node %q: %w", n.ID, err)
 		}
 		captured = append(captured, capt...)
+		reconcileSoftDependencies(n)
 		if err := g.AddDependencies(n.ID, n.Dependencies); err != nil {
 			return nil, nil, fmt.Errorf("node %q: register deps: %w", n.ID, err)
 		}
@@ -481,18 +482,21 @@ func (ctx *CompilationContext) analyzeVariables(n *Node, inspector *ast.Inspecto
 	identityIterators := make(map[string]struct{}, len(iteratorNames))
 	var captured []string
 	for _, v := range n.Variables {
-		deps, iterRefs, capt, err := ctx.extractDependencies(inspector, v.Expression, iteratorNames)
+		deps, softDeps, iterRefs, capt, err := ctx.extractDependencies(inspector, v.Expression, iteratorNames)
 		if err != nil {
 			return nil, fmt.Errorf("variable at %q: %w", v.Path, err)
 		}
 		captured = append(captured, capt...)
 		if len(iterRefs) > 0 {
 			v.Kind = variable.ResourceVariableKindIteration
-		} else if (len(deps) > 0 || len(capt) > 0) && v.Kind == variable.ResourceVariableKindStatic {
+		} else if (len(deps) > 0 || len(softDeps) > 0 || len(capt) > 0) && v.Kind == variable.ResourceVariableKindStatic {
 			v.Kind = variable.ResourceVariableKindDynamic
 		}
 		for _, d := range deps {
 			addDependency(n, d)
+		}
+		for _, d := range softDeps {
+			addSoftDependency(n, d)
 		}
 		if isIdentityFieldPath(v.Path, n.Namespaced) {
 			for _, it := range iterRefs {
@@ -523,7 +527,7 @@ func (ctx *CompilationContext) analyzeForEach(n *Node, inspector *ast.Inspector)
 	iteratorNames := nodeIteratorNames(n)
 	var captured []string
 	for _, dim := range n.ForEach {
-		deps, iterRefs, capt, err := ctx.extractDependencies(inspector, dim.Expression, iteratorNames)
+		deps, softDeps, iterRefs, capt, err := ctx.extractDependencies(inspector, dim.Expression, iteratorNames)
 		if err != nil {
 			return nil, fmt.Errorf("forEach %q: %w", dim.Name, err)
 		}
@@ -534,6 +538,9 @@ func (ctx *CompilationContext) analyzeForEach(n *Node, inspector *ast.Inspector)
 		for _, d := range deps {
 			addDependency(n, d)
 		}
+		for _, d := range softDeps {
+			addSoftDependency(n, d)
+		}
 	}
 	return captured, nil
 }
@@ -543,7 +550,7 @@ func (ctx *CompilationContext) analyzeForEach(n *Node, inspector *ast.Inspector)
 func (ctx *CompilationContext) analyzeIncludeWhen(n *Node, inspector *ast.Inspector) ([]string, error) {
 	var captured []string
 	for i, expr := range n.IncludeWhen {
-		deps, _, capt, err := ctx.extractDependencies(inspector, expr, nil)
+		deps, softDeps, _, capt, err := ctx.extractDependencies(inspector, expr, nil)
 		if err != nil {
 			return nil, fmt.Errorf("includeWhen[%d]: %w", i, err)
 		}
@@ -554,6 +561,12 @@ func (ctx *CompilationContext) analyzeIncludeWhen(n *Node, inspector *ast.Inspec
 			}
 			addDependency(n, d)
 		}
+		for _, d := range softDeps {
+			if d == n.ID {
+				continue
+			}
+			addSoftDependency(n, d)
+		}
 	}
 	return captured, nil
 }
@@ -563,14 +576,14 @@ func (ctx *CompilationContext) analyzeIncludeWhen(n *Node, inspector *ast.Inspec
 // implicit ordering ambiguity.
 func (ctx *CompilationContext) analyzeReadyWhen(n *Node, inspector *ast.Inspector) ([]string, error) {
 	for i, expr := range n.ReadyWhen {
-		deps, _, capt, err := ctx.extractDependencies(inspector, expr, nil)
+		deps, softDeps, _, capt, err := ctx.extractDependencies(inspector, expr, nil)
 		if err != nil {
 			return nil, fmt.Errorf("readyWhen[%d]: %w", i, err)
 		}
 		if len(capt) > 0 {
 			return nil, fmt.Errorf("readyWhen[%d] (%q) may only reference the node itself, found capture %q", i, expr.UserExpression(), capt[0])
 		}
-		for _, d := range deps {
+		for _, d := range append(deps, softDeps...) {
 			if d != n.ID {
 				return nil, fmt.Errorf("readyWhen[%d] (%q) may only reference the node itself, found %q", i, expr.UserExpression(), d)
 			}
@@ -583,9 +596,15 @@ func (ctx *CompilationContext) analyzeReadyWhen(n *Node, inspector *ast.Inspecto
 // referenced identifier against the lexical frame chain:
 //
 //   - a local node ID (this frame)        -> nodeDeps (an internal DAG edge)
+//   - a local node ID via optional-only    -> softNodeDeps (no edge, no order)
 //   - a captured ancestor node ID         -> captured (bubbles to the subgraph)
 //   - an iterator variable / each         -> iteratorRefs (frame-neutral)
 //   - anything else                       -> an "unknown identifier" error
+//
+// A local id is soft only when every occurrence is the receiver of optional
+// chaining; a single hard access anywhere in the expression makes it a
+// nodeDep. The caller merges results across a node's expressions, where hard
+// still wins over soft.
 //
 // The no-mix rule: an expression's node references must all resolve to a
 // single frame. Mixing this graph's nodes with an enclosing graph's nodes in
@@ -595,10 +614,22 @@ func (ctx *CompilationContext) extractDependencies(
 	inspector *ast.Inspector,
 	expr *krocel.Expression,
 	iteratorNames []string,
-) (nodeDeps []string, iteratorRefs []string, captured []string, err error) {
+) (nodeDeps []string, softNodeDeps []string, iteratorRefs []string, captured []string, err error) {
 	result, err := inspector.Inspect(expr.Original)
 	if err != nil {
-		return nil, nil, nil, fmt.Errorf("inspect: %w", err)
+		return nil, nil, nil, nil, fmt.Errorf("inspect: %w", err)
+	}
+
+	// A local node reference is soft when every occurrence of the id is the
+	// receiver of optional chaining. Comparing total occurrences against the
+	// optional-receiver occurrences detects a single hard access mixed in.
+	total := map[string]int{}
+	for _, dep := range result.ResourceDependencies {
+		total[dep.ID]++
+	}
+	optional := map[string]int{}
+	for _, dep := range result.OptionalResourceDependencies {
+		optional[dep.ID]++
 	}
 
 	frames := make(map[int]struct{})
@@ -617,8 +648,12 @@ func (ctx *CompilationContext) extractDependencies(
 		}
 		switch d := ctx.frameDepth(id); {
 		case d == 0:
-			if !slices.Contains(nodeDeps, id) {
-				nodeDeps = append(nodeDeps, id)
+			if total[id] > optional[id] {
+				if !slices.Contains(nodeDeps, id) {
+					nodeDeps = append(nodeDeps, id)
+				}
+			} else if !slices.Contains(softNodeDeps, id) {
+				softNodeDeps = append(softNodeDeps, id)
 			}
 			frames[0] = struct{}{}
 		case d > 0:
@@ -634,21 +669,21 @@ func (ctx *CompilationContext) extractDependencies(
 
 	for _, dep := range result.ResourceDependencies {
 		if err := classify(dep.ID); err != nil {
-			return nil, nil, nil, err
+			return nil, nil, nil, nil, err
 		}
 	}
 	for _, unknown := range result.UnknownResources {
 		if err := classify(unknown.ID); err != nil {
-			return nil, nil, nil, err
+			return nil, nil, nil, nil, err
 		}
 	}
 	if len(result.UnknownFunctions) > 0 {
-		return nil, nil, nil, fmt.Errorf("uses unknown functions: %v", result.UnknownFunctions)
+		return nil, nil, nil, nil, fmt.Errorf("uses unknown functions: %v", result.UnknownFunctions)
 	}
 	if len(frames) > 1 {
-		return nil, nil, nil, fmt.Errorf("expression %q mixes node references from different graph scopes; an expression may reference one scope (this graph or an enclosing graph), not both", expr.UserExpression())
+		return nil, nil, nil, nil, fmt.Errorf("expression %q mixes node references from different graph scopes; an expression may reference one scope (this graph or an enclosing graph), not both", expr.UserExpression())
 	}
-	return nodeDeps, iteratorRefs, captured, nil
+	return nodeDeps, softNodeDeps, iteratorRefs, captured, nil
 }
 
 func nodeIteratorNames(n *Node) []string {
@@ -666,4 +701,32 @@ func addDependency(n *Node, dep string) {
 	if !slices.Contains(n.Dependencies, dep) {
 		n.Dependencies = append(n.Dependencies, dep)
 	}
+}
+
+func addSoftDependency(n *Node, dep string) {
+	if !slices.Contains(n.SoftDependencies, dep) {
+		n.SoftDependencies = append(n.SoftDependencies, dep)
+	}
+}
+
+// reconcileSoftDependencies enforces hard-wins across a node's expressions: an
+// id recorded as both a hard Dependency (a hard access somewhere) and a
+// SoftDependency (an optional access elsewhere) is a hard dependency, so it is
+// dropped from SoftDependencies. The DAG is then built from Dependencies alone.
+func reconcileSoftDependencies(n *Node) {
+	if len(n.SoftDependencies) == 0 {
+		return
+	}
+	hard := make(map[string]struct{}, len(n.Dependencies))
+	for _, d := range n.Dependencies {
+		hard[d] = struct{}{}
+	}
+	out := n.SoftDependencies[:0]
+	for _, d := range n.SoftDependencies {
+		if _, ok := hard[d]; ok {
+			continue
+		}
+		out = append(out, d)
+	}
+	n.SoftDependencies = out
 }

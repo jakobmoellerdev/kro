@@ -189,6 +189,48 @@ func TestCompile(t *testing.T) {
 			},
 		},
 		{
+			// A reference reached only through optional chaining is a soft
+			// dependency: no DAG edge, no ordering. The referrer is declared
+			// before its target to show ordering is not forced.
+			name: "optional-only reference is soft",
+			graph: generator.NewGraph("g",
+				generator.WithTemplate("cm", map[string]any{
+					"apiVersion": "v1", "kind": "ConfigMap",
+					"metadata": map[string]any{"name": "cfg"},
+					"data":     map[string]any{"k": "${later.?field.orValue(\"fallback\")}"},
+				}),
+				generator.WithDef("later", map[string]any{"field": "v"}),
+			),
+			after: func(t *testing.T, prog *Program, _ *expv1alpha1.Graph) {
+				cm := prog.Nodes["cm"]
+				assert.Empty(t, cm.Dependencies, "soft ref must not be a hard dependency")
+				assert.Equal(t, []string{"later"}, cm.SoftDependencies)
+				assert.Empty(t, prog.DAG.Vertices["cm"].DependsOn, "soft ref must not add a DAG edge")
+				// No edge means the referrer may order before its target.
+				assert.Less(t, indexOf(prog.TopologicalOrder, "cm"), indexOf(prog.TopologicalOrder, "later"))
+			},
+		},
+		{
+			// An id read both bare (hard) and via optional chaining stays
+			// hard: hard wins, so it is a Dependency and never a soft one.
+			name: "bare and optional reference stays hard",
+			graph: generator.NewGraph("g",
+				generator.WithDef("src", map[string]any{"name": "n", "extra": "e"}),
+				generator.WithTemplate("cm", map[string]any{
+					"apiVersion": "v1", "kind": "ConfigMap",
+					"metadata": map[string]any{"name": "${src.name}"},
+					"data":     map[string]any{"k": "${src.?extra.orValue(\"x\")}"},
+				}),
+			),
+			after: func(t *testing.T, prog *Program, _ *expv1alpha1.Graph) {
+				cm := prog.Nodes["cm"]
+				assert.Equal(t, []string{"src"}, cm.Dependencies)
+				assert.Empty(t, cm.SoftDependencies, "hard access wins; not a soft dep")
+				assert.Contains(t, prog.DAG.Vertices["cm"].DependsOn, "src")
+				assert.Equal(t, []string{"src", "cm"}, prog.TopologicalOrder)
+			},
+		},
+		{
 			name: "diamond shape",
 			graph: generator.NewGraph("g",
 				generator.WithDef("root", map[string]any{"name": "r"}),

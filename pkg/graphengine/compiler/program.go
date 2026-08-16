@@ -111,6 +111,13 @@ type Node struct {
 	// ForEach axes, IncludeWhen, or ReadyWhen. Self-references are filtered.
 	Dependencies []string
 
+	// SoftDependencies are node IDs referenced only through CEL optional
+	// chaining (id.?field / id[?"k"]). They carry no DAG edge and impose no
+	// ordering: the node may run before its target publishes, in which case
+	// the optional expression yields optional.none() and the field is omitted.
+	// An id referenced by any hard access is a Dependency, never here.
+	SoftDependencies []string
+
 	// ForEach is the cartesian-product expansion axes. Empty when the node
 	// is not a collection.
 	ForEach []ForEachDimension
