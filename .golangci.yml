@@ -29,13 +29,46 @@ linters:
           - dupl
           - lll
         path: pkg/*
+      # Test files legitimately repeat fixture strings, use long table rows,
+      # and take fixed helper arguments — these linters are noise there.
+      - linters:
+          - goconst
+          - lll
+          - dupl
+          - unparam
+          - gocyclo
+        path: _test\.go$
     paths:
       - third_party$
       - builtin$
       - examples$
   settings:
     goconst:
-      ignore-string-values: ["true","false"]
+      # Ignore protocol/schema vocabulary that recurs by nature — Kubernetes
+      # object field keys and JSON-Schema type names. Deduping these into named
+      # constants adds no clarity.
+      ignore-string-values:
+        - "true"
+        - "false"
+        - "apiVersion"
+        - "kind"
+        - "metadata"
+        - "name"
+        - "namespace"
+        - "spec"
+        - "status"
+        - "conditions"
+        - "labels"
+        - "annotations"
+        - "object"
+        - "string"
+        - "integer"
+        - "number"
+        - "boolean"
+        - "array"
+        - "map"
+        - "bool"
+        - "int"
     staticcheck:
       checks:
         - -QF1008

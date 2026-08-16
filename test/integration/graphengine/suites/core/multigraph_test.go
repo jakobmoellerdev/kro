@@ -71,7 +71,9 @@ func TestMultiGraphIsolationOnSharedGVR(t *testing.T) {
 	cmBKey := types.NamespacedName{Namespace: ns, Name: "child-b"}
 	cmB := env.AwaitObject(t, configMapGVK, cmBKey, nil, 5*time.Second)
 	cmB = cmB.DeepCopy()
-	unstructured.SetNestedField(cmB.Object, "drifted", "data", "v")
+	if err := unstructured.SetNestedField(cmB.Object, "drifted", "data", "v"); err != nil {
+		t.Fatalf("set drift field: %v", err)
+	}
 	if err := env.Client.Update(env.Ctx, cmB); err != nil {
 		t.Fatalf("update child-b: %v", err)
 	}

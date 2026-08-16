@@ -38,17 +38,25 @@ const (
 	NodeKindGraph
 )
 
+// Node kind keywords, matching the RGD API vocabulary.
+const (
+	nodeKeywordTemplate = "template"
+	nodeKeywordRef      = "ref"
+	nodeKeywordDef      = "def"
+	nodeKeywordGraph    = "graph"
+)
+
 // String returns the lowercase keyword for the node kind, matching the API.
 func (k NodeKind) String() string {
 	switch k {
 	case NodeKindTemplate:
-		return "template"
+		return nodeKeywordTemplate
 	case NodeKindRef:
-		return "ref"
+		return nodeKeywordRef
 	case NodeKindDef:
-		return "def"
+		return nodeKeywordDef
 	case NodeKindGraph:
-		return "graph"
+		return nodeKeywordGraph
 	default:
 		return "unknown"
 	}
