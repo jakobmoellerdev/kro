@@ -31,7 +31,12 @@ import (
 	"github.com/kubernetes-sigs/kro/pkg/testutil/generator"
 )
 
-var _ = Describe("Nested ResourceGraphDefinition", func() {
+// Serial: these specs recursively create child RGDs (and thus child CRDs),
+// stacking multiple CRD establish/delete cycles. On the shared control plane
+// the apiserver's (serial, cluster-global) CRD subsystem lags under concurrent
+// CRD churn, so running them outside the parallel phase keeps them
+// deterministic (and, without contention, faster).
+var _ = Describe("Nested ResourceGraphDefinition", Serial, func() {
 	var (
 		ns *corev1.Namespace
 	)
