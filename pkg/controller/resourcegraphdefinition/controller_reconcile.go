@@ -194,11 +194,8 @@ func (r *ResourceGraphDefinitionReconciler) setupMicroController(
 	instCtrl := instancectrl.NewController(
 		instanceLogger,
 		instancectrl.ReconcileConfig{
-			DefaultRequeueDuration:    r.cfg.InstanceRequeueInterval,
-			DeletionGraceTimeDuration: 30 * time.Second,
-			DeletionPolicy:            "Delete",
-			RGDConfig:                 r.cfg.RGDConfig,
-			HasAuthorConditions:       len(processedRGD.Instance.Conditions) > 0,
+			DefaultRequeueDuration: r.cfg.InstanceRequeueInterval,
+			HasAuthorConditions:    len(processedRGD.Instance.Conditions) > 0,
 		},
 		gvr,
 		r.revisionsRegistry.ResolverFor(rgd.Name),

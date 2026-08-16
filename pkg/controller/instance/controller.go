@@ -35,7 +35,6 @@ import (
 	"github.com/kubernetes-sigs/kro/pkg/controller/instance/applyset"
 	"github.com/kubernetes-sigs/kro/pkg/dynamiccontroller"
 	"github.com/kubernetes-sigs/kro/pkg/features"
-	"github.com/kubernetes-sigs/kro/pkg/graph"
 	"github.com/kubernetes-sigs/kro/pkg/graph/revisions"
 	"github.com/kubernetes-sigs/kro/pkg/graphengine/executor"
 	"github.com/kubernetes-sigs/kro/pkg/graphengine/rgdadapter"
@@ -54,16 +53,6 @@ type ReconcileConfig struct {
 	// reconciler needs to retry after transient cluster state changes.
 	// Set to 0 to disable delayed requeues.
 	DefaultRequeueDuration time.Duration
-	// DeletionGraceTimeDuration is the duration to wait after initializing a resource
-	// deletion before considering it failed
-	// Not implemented.
-	DeletionGraceTimeDuration time.Duration
-	// DeletionPolicy is the deletion policy to use when deleting resources in the graph
-	// TODO(a-hilaly): need to define think the different deletion policies we need to
-	// support.
-	DeletionPolicy string
-	// RGDConfig holds RGD runtime configuration parameters.
-	RGDConfig graph.RGDConfig
 	// HasAuthorConditions is true when the RGD declares an author
 	// `conditions:` block, which replaces kro's built-in conditions on
 	// .status.conditions[].
