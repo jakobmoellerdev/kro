@@ -14,31 +14,24 @@
 
 package dynamiccontroller
 
-import "k8s.io/apimachinery/pkg/runtime/schema"
+import kwatch "github.com/kubernetes-sigs/kro/pkg/watch"
+
+// The event types are shared with the graph-engine watch router via
+// pkg/watch. They are re-exported here as aliases so dynamiccontroller callers
+// keep their existing import path while the underlying type is identical
+// across both controller stacks.
 
 // EventType identifies the kind of change that triggered an event.
-type EventType string
+type EventType = kwatch.EventType
 
 const (
-	EventAdd    EventType = "add"
-	EventUpdate EventType = "update"
-	EventDelete EventType = "delete"
+	EventAdd    = kwatch.EventAdd
+	EventUpdate = kwatch.EventUpdate
+	EventDelete = kwatch.EventDelete
 )
 
 // Event is a normalized watch event emitted by the WatchManager.
-// Consumers decide what to act on -- no old/new comparison or generation
-// filtering is performed by the watch layer.
-type Event struct {
-	Type      EventType
-	GVR       schema.GroupVersionResource
-	Name      string
-	Namespace string
-	Labels    map[string]string
-	// OldLabels holds the labels from the previous version of the object
-	// (populated only for update events). Used by collection watches to detect
-	// label changes that cause an object to enter or leave a selector match.
-	OldLabels map[string]string
-}
+type Event = kwatch.Event
 
 // EventHandler processes a single watch event.
-type EventHandler func(event Event)
+type EventHandler = kwatch.EventHandler

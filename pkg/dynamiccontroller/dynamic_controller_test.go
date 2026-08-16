@@ -875,8 +875,8 @@ func TestGetInformer_ReturnsNil_ForMissingWatch(t *testing.T) {
 	require.NoError(t, wm.EnsureWatch(gvr, "owner"))
 	assert.NotNil(t, wm.GetInformer(gvr))
 
-	wm.forceStopWatch(gvr)
-	assert.Nil(t, wm.GetInformer(gvr), "GetInformer should return nil after forceStopWatch")
+	wm.ReleaseWatch(gvr, "owner")
+	assert.Nil(t, wm.GetInformer(gvr), "GetInformer should return nil after the last owner releases the watch")
 }
 
 func TestDeregister_HandlerNoLongerReceivesEvents(t *testing.T) {

@@ -14,35 +14,24 @@
 
 package watchrouter
 
-import "k8s.io/apimachinery/pkg/runtime/schema"
+import kwatch "github.com/kubernetes-sigs/kro/pkg/watch"
+
+// The event types are shared with the RGD/instance dynamic controller via
+// pkg/watch. They are re-exported here as aliases so watchrouter callers keep
+// their existing import path while the underlying type is identical across
+// both controller stacks.
 
 // EventType identifies the kind of informer change that produced an event.
-type EventType string
+type EventType = kwatch.EventType
 
 const (
-	EventAdd    EventType = "add"
-	EventUpdate EventType = "update"
-	EventDelete EventType = "delete"
+	EventAdd    = kwatch.EventAdd
+	EventUpdate = kwatch.EventUpdate
+	EventDelete = kwatch.EventDelete
 )
 
-// Event is a normalized informer event emitted by the Manager. The
-// shape is deliberately small — Labels and OldLabels are populated only when
-// useful (collection routing) so consumers don't have to deal with raw
-// runtime.Objects.
-type Event struct {
-	Type      EventType
-	GVR       schema.GroupVersionResource
-	Name      string
-	Namespace string
-	Labels    map[string]string
-	// OldLabels carries the previous version's labels on update events.
-	// Used by collection watches to catch label-loss transitions where an
-	// object stops matching a selector and the consumer still needs to
-	// re-reconcile (e.g. to drop it from the membership set).
-	OldLabels map[string]string
-}
+// Event is a normalized informer event emitted by the Manager.
+type Event = kwatch.Event
 
-// EventHandler processes a single Event. The Manager invokes the
-// handler synchronously from informer goroutines, so implementations must
-// keep work fast — push to a queue or fan-out channel for heavy work.
-type EventHandler func(event Event)
+// EventHandler processes a single Event.
+type EventHandler = kwatch.EventHandler
