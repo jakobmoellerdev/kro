@@ -41,7 +41,14 @@ import (
 
 const isolatedGraphRevisionRetentionLimit = 5
 
-var _ = Describe("GraphRevision Integration", Serial, func() {
+// These specs each boot their own fully isolated envtest control plane
+// (dedicated apiserver + controller manager) with a per-spec MaxGraphRevisions
+// config and, in some cases, controller restarts. They no longer run Serial:
+// Ginkgo parallelism is process-based, each spec's control plane is fully
+// isolated on ephemeral ports, and every query is scoped to the spec's own
+// randomly-named RGD, so they are safe to run concurrently with the rest of
+// the core suite (bounded by GINKGO_PROCS).
+var _ = Describe("GraphRevision Integration", func() {
 	It("should retain only the newest revisions and keep issuing from the watermark", func(ctx SpecContext) {
 		testEnv := newIsolatedGraphRevisionEnv(ctx, isolatedGraphRevisionRetentionLimit)
 		rgdName := fmt.Sprintf("gv-retain-%s", rand.String(5))
@@ -534,8 +541,6 @@ var _ = Describe("GraphRevision Integration", Serial, func() {
 })
 
 // Helpers — self-contained for this suite.
-
-
 
 func newIsolatedGraphRevisionEnv(ctx SpecContext, maxGraphRevisions int) *environment.Environment {
 	testEnv, err := environment.New(ctx, environment.ControllerConfig{

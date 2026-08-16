@@ -69,6 +69,15 @@ type ControllerConfig struct {
 	LogWriter         io.Writer
 }
 
+// init installs a no-op apiserver warning handler for every client-go client
+// built in this test process, silencing benign warning headers (e.g. "child
+// pods are preserved by default when jobs are deleted; set
+// propagationPolicy=Background ...") that otherwise clutter spec output. It
+// affects only the integration test binary, never production clients.
+func init() {
+	rest.SetDefaultWarningHandler(rest.NoWarnings{})
+}
+
 func New(ctx context.Context, controllerConfig ControllerConfig) (_ *Environment, retErr error) {
 	env := &Environment{
 		ControllerConfig: controllerConfig,
