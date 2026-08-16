@@ -558,6 +558,27 @@ func newIsolatedGraphRevisionEnv(ctx SpecContext, maxGraphRevisions int) *enviro
 	return testEnv
 }
 
+// newIsolatedEnv boots a dedicated envtest control plane + controller manager
+// for a single spec and registers teardown. Use it for specs that create
+// cluster-scoped, fixed-name resources the controller manages under the real
+// kro.run group (e.g. nested RGDs and their generated CRDs), which cannot share
+// the group-isolated core control plane without colliding across parallel
+// processes.
+func newIsolatedEnv(ctx SpecContext) *environment.Environment {
+	testEnv, err := environment.New(ctx, environment.ControllerConfig{
+		AllowCRDDeletion: true,
+		ReconcileConfig: ctrlinstance.ReconcileConfig{
+			DefaultRequeueDuration: 5 * time.Second,
+		},
+		LogWriter: GinkgoWriter,
+	})
+	ExpectWithOffset(1, err).NotTo(HaveOccurred())
+	DeferCleanup(func() {
+		Expect(stopEnvironmentWithRetry(testEnv)).To(Succeed())
+	})
+	return testEnv
+}
+
 func stopEnvironmentWithRetry(testEnv *environment.Environment) error {
 	sleepTime := 1 * time.Millisecond
 	var err error
