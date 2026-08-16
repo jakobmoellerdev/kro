@@ -29,39 +29,44 @@ import (
 
 	krov1alpha1 "github.com/kubernetes-sigs/kro/api/v1alpha1"
 	"github.com/kubernetes-sigs/kro/pkg/testutil/generator"
+	"github.com/kubernetes-sigs/kro/test/integration/environment"
 )
 
-// Serial: these specs recursively create child RGDs (and thus child CRDs),
-// stacking multiple CRD establish/delete cycles. On the shared control plane
-// the apiserver's (serial, cluster-global) CRD subsystem lags under concurrent
-// CRD churn, so running them outside the parallel phase keeps them
-// deterministic (and, without contention, faster).
-var _ = Describe("Nested ResourceGraphDefinition", Serial, func() {
+// Each spec runs against its own isolated envtest control plane. These specs
+// drive the controller to create nested RGDs (and their generated CRDs) under
+// the real kro.run group with fixed, cluster-global names, which the core
+// suite's per-process group isolation cannot disambiguate. A dedicated control
+// plane per spec gives each its own cluster, so they run concurrently (no
+// Serial) without colliding on those names or contending on a shared,
+// cluster-global CRD subsystem.
+var _ = Describe("Nested ResourceGraphDefinition", func() {
 	var (
-		ns *corev1.Namespace
+		testEnv *environment.Environment
+		ns      *corev1.Namespace
 	)
 
 	BeforeEach(func(ctx SpecContext) {
+		testEnv = newIsolatedEnv(ctx)
 		ns = &corev1.Namespace{
 			ObjectMeta: metav1.ObjectMeta{
 				Name: fmt.Sprintf("test-%s", rand.String(5)),
 			},
 		}
-		Expect(env.Client.Create(ctx, ns)).To(Succeed())
+		Expect(testEnv.Client.Create(ctx, ns)).To(Succeed())
 	})
 
 	AfterEach(func(ctx SpecContext) {
-		Expect(env.Client.Delete(ctx, ns)).To(Succeed())
+		Expect(testEnv.Client.Delete(ctx, ns)).To(Succeed())
 	})
 
 	It("should handle nested ResourceGraphDefinition lifecycle", func(ctx SpecContext) {
 		// Create parent ResourceGraphDefinition
 		rg, genInstance := nestedResourceGraphDefinition("testnestedrg")
-		Expect(env.Client.Create(ctx, rg)).To(Succeed())
+		Expect(testEnv.Client.Create(ctx, rg)).To(Succeed())
 
 		// Wait for parent ResourceGraphDefinition to be ready
 		Eventually(func(g Gomega, ctx SpecContext) {
-			err := env.Client.Get(ctx, types.NamespacedName{
+			err := testEnv.Client.Get(ctx, types.NamespacedName{
 				Name: rg.Name,
 			}, rg)
 			g.Expect(err).ToNot(HaveOccurred())
@@ -70,11 +75,11 @@ var _ = Describe("Nested ResourceGraphDefinition", Serial, func() {
 
 		// Create instance
 		instance := genInstance(ns.Name, "test-string", "string", "10")
-		Expect(env.Client.Create(ctx, instance)).To(Succeed())
+		Expect(testEnv.Client.Create(ctx, instance)).To(Succeed())
 
 		// Expect instance status to eventually be Active
 		Eventually(func(g Gomega, ctx SpecContext) {
-			err := env.Client.Get(ctx, types.NamespacedName{
+			err := testEnv.Client.Get(ctx, types.NamespacedName{
 				Name:      instance.GetName(),
 				Namespace: ns.Name,
 			}, instance)
@@ -89,7 +94,7 @@ var _ = Describe("Nested ResourceGraphDefinition", Serial, func() {
 		// Wait for nested ResourceGraphDefinition to be created and ready
 		var nestedRG krov1alpha1.ResourceGraphDefinition
 		Eventually(func(g Gomega, ctx SpecContext) {
-			err := env.Client.Get(ctx, types.NamespacedName{
+			err := testEnv.Client.Get(ctx, types.NamespacedName{
 				Name: "rg-nested-string",
 			}, &nestedRG)
 			g.Expect(err).ToNot(HaveOccurred())
@@ -97,29 +102,29 @@ var _ = Describe("Nested ResourceGraphDefinition", Serial, func() {
 		}, 30*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 		// Delete instance
-		Expect(env.Client.Delete(ctx, instance)).To(Succeed())
+		Expect(testEnv.Client.Delete(ctx, instance)).To(Succeed())
 
 		// Verify nested ResourceGraphDefinition is deleted
 		Eventually(func(g Gomega, ctx SpecContext) {
-			err := env.Client.Get(ctx, types.NamespacedName{
+			err := testEnv.Client.Get(ctx, types.NamespacedName{
 				Name: "rg-nested-string",
 			}, &nestedRG)
 			g.Expect(err).To(MatchError(errors.IsNotFound, "nested RGD should be deleted"))
 		}, 30*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 		// Delete parent ResourceGraphDefinition
-		Expect(env.Client.Delete(ctx, rg)).To(Succeed())
+		Expect(testEnv.Client.Delete(ctx, rg)).To(Succeed())
 	})
 
 	It("should dynamically create RGDs with different schema field types", func(ctx SpecContext) {
 		// Create parent ResourceGraphDefinition
 		By("Creating parent ResourceGraphDefinition")
 		rg, genInstance := nestedResourceGraphDefinition("testmultirg")
-		Expect(env.Client.Create(ctx, rg)).To(Succeed())
+		Expect(testEnv.Client.Create(ctx, rg)).To(Succeed())
 
 		// Wait for parent ResourceGraphDefinition to be ready
 		Eventually(func(g Gomega, ctx SpecContext) {
-			err := env.Client.Get(ctx, types.NamespacedName{
+			err := testEnv.Client.Get(ctx, types.NamespacedName{
 				Name: rg.Name,
 			}, rg)
 			g.Expect(err).ToNot(HaveOccurred())
@@ -140,7 +145,7 @@ var _ = Describe("Nested ResourceGraphDefinition", Serial, func() {
 		for _, t := range testCases {
 			By(fmt.Sprintf("Creating instance %s", t.name))
 			instance := genInstance(ns.Name, t.name, t.typeVal, t.defaultVal)
-			Expect(env.Client.Create(ctx, instance)).To(Succeed())
+			Expect(testEnv.Client.Create(ctx, instance)).To(Succeed())
 		}
 
 		// Wait for all nested ResourceGraphDefinitions and verify status
@@ -149,7 +154,7 @@ var _ = Describe("Nested ResourceGraphDefinition", Serial, func() {
 			// Wait for nested ResourceGraphDefinition
 			var nestedRG krov1alpha1.ResourceGraphDefinition
 			Eventually(func(g Gomega, ctx SpecContext) {
-				err := env.Client.Get(ctx, types.NamespacedName{
+				err := testEnv.Client.Get(ctx, types.NamespacedName{
 					Name: fmt.Sprintf("rg-nested-%s", t.typeVal),
 				}, &nestedRG)
 				g.Expect(err).ToNot(HaveOccurred())
@@ -159,7 +164,7 @@ var _ = Describe("Nested ResourceGraphDefinition", Serial, func() {
 			// Verify parent instance status
 			Eventually(func(g Gomega, ctx SpecContext) {
 				instance := genInstance(ns.Name, t.name, t.typeVal, t.defaultVal)
-				err := env.Client.Get(ctx, types.NamespacedName{
+				err := testEnv.Client.Get(ctx, types.NamespacedName{
 					Name:      t.name,
 					Namespace: ns.Name,
 				}, instance)
@@ -177,7 +182,7 @@ var _ = Describe("Nested ResourceGraphDefinition", Serial, func() {
 		for _, t := range testCases {
 			By(fmt.Sprintf("Deleting instance %s", t.name))
 			instance := genInstance(ns.Name, t.name, t.typeVal, t.defaultVal)
-			Expect(env.Client.Delete(ctx, instance)).To(Succeed())
+			Expect(testEnv.Client.Delete(ctx, instance)).To(Succeed())
 		}
 
 		// Verify all nested ResourceGraphDefinitions are deleted
@@ -185,7 +190,7 @@ var _ = Describe("Nested ResourceGraphDefinition", Serial, func() {
 			By(fmt.Sprintf("Verifying instance deletion %s", t.name))
 			Eventually(func(g Gomega, ctx SpecContext) {
 				var nestedRG krov1alpha1.ResourceGraphDefinition
-				err := env.Client.Get(ctx, types.NamespacedName{
+				err := testEnv.Client.Get(ctx, types.NamespacedName{
 					Name: fmt.Sprintf("rg-nested-%s", t.typeVal),
 				}, &nestedRG)
 				g.Expect(err).To(MatchError(errors.IsNotFound, "nested RGD should be deleted"))
@@ -194,11 +199,11 @@ var _ = Describe("Nested ResourceGraphDefinition", Serial, func() {
 
 		// Delete parent ResourceGraphDefinition
 		By("Deleting parent ResourceGraphDefinition")
-		Expect(env.Client.Delete(ctx, rg)).To(Succeed())
+		Expect(testEnv.Client.Delete(ctx, rg)).To(Succeed())
 
 		// Verify parent RGD is actually deleted
 		Eventually(func(g Gomega, ctx SpecContext) {
-			err := env.Client.Get(ctx, types.NamespacedName{
+			err := testEnv.Client.Get(ctx, types.NamespacedName{
 				Name: rg.Name,
 			}, &krov1alpha1.ResourceGraphDefinition{})
 			g.Expect(err).To(MatchError(errors.IsNotFound, "parent RGD should be deleted"))
