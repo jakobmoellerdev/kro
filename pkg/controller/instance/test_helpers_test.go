@@ -195,10 +195,6 @@ func newControllerUnderTest(t *testing.T, raw *dynamicfake.FakeDynamicClient, g 
 		zap.New(zap.UseDevMode(true)),
 		ReconcileConfig{
 			DefaultRequeueDuration: 2 * time.Second,
-			RGDConfig: graph.RGDConfig{
-				MaxCollectionSize:          10,
-				MaxCollectionDimensionSize: 10,
-			},
 		},
 		controllerTestParentGVR,
 		registry.ResolverForRGD(controllerTestParentGVR.Resource),

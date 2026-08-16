@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package graphrevisions_test
+package core_test
 
 import (
 	"fmt"
@@ -36,13 +36,19 @@ import (
 	"github.com/kubernetes-sigs/kro/pkg/controller/resourcegraphdefinition"
 	graphhash "github.com/kubernetes-sigs/kro/pkg/graph/hash"
 	"github.com/kubernetes-sigs/kro/pkg/metadata"
-	"github.com/kubernetes-sigs/kro/pkg/testutil/generator"
 	"github.com/kubernetes-sigs/kro/test/integration/environment"
 )
 
 const isolatedGraphRevisionRetentionLimit = 5
 
-var _ = Describe("GraphRevision Integration", Serial, func() {
+// These specs each boot their own fully isolated envtest control plane
+// (dedicated apiserver + controller manager) with a per-spec MaxGraphRevisions
+// config and, in some cases, controller restarts. They no longer run Serial:
+// Ginkgo parallelism is process-based, each spec's control plane is fully
+// isolated on ephemeral ports, and every query is scoped to the spec's own
+// randomly-named RGD, so they are safe to run concurrently with the rest of
+// the core suite (bounded by GINKGO_PROCS).
+var _ = Describe("GraphRevision Integration", func() {
 	It("should retain only the newest revisions and keep issuing from the watermark", func(ctx SpecContext) {
 		testEnv := newIsolatedGraphRevisionEnv(ctx, isolatedGraphRevisionRetentionLimit)
 		rgdName := fmt.Sprintf("gv-retain-%s", rand.String(5))
@@ -535,36 +541,6 @@ var _ = Describe("GraphRevision Integration", Serial, func() {
 })
 
 // Helpers — self-contained for this suite.
-
-func configmapRGD(name, kind string) *krov1alpha1.ResourceGraphDefinition {
-	return generator.NewResourceGraphDefinition(name,
-		generator.WithSchema(
-			kind, "v1alpha1",
-			map[string]interface{}{
-				"data": "string | default=hello",
-			},
-			nil,
-		),
-		generator.WithResource("configmap", map[string]interface{}{
-			"apiVersion": "v1",
-			"kind":       "ConfigMap",
-			"metadata": map[string]interface{}{
-				"name": "cm-${schema.metadata.name}",
-			},
-			"data": map[string]interface{}{
-				"key": "${schema.spec.data}",
-			},
-		}, nil, nil),
-	)
-}
-
-func mustComputeSpecHash(spec krov1alpha1.ResourceGraphDefinitionSpec) string {
-	h, err := graphhash.Spec(spec)
-	if err != nil {
-		panic(fmt.Sprintf("failed to compute spec hash: %v", err))
-	}
-	return h
-}
 
 func newIsolatedGraphRevisionEnv(ctx SpecContext, maxGraphRevisions int) *environment.Environment {
 	testEnv, err := environment.New(ctx, environment.ControllerConfig{
