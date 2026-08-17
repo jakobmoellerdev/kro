@@ -67,6 +67,60 @@ func TestSetUnknownFeatureReturnsError(t *testing.T) {
 	require.Error(t, err, "setting an unknown feature should return an error")
 }
 
+// TestDeferUnresolvedSchema verifies the policy point that decides whether an
+// unresolvable resource is deferred: it requires BOTH the
+// DeferredSchemaResolution gate to be enabled AND a non-empty includeWhen.
+func TestDeferUnresolvedSchema(t *testing.T) {
+	tests := []struct {
+		name           string
+		gateEnabled    bool
+		hasIncludeWhen bool
+		want           bool
+	}{
+		{
+			name:           "gate off, includeWhen present",
+			gateEnabled:    false,
+			hasIncludeWhen: true,
+			want:           false,
+		},
+		{
+			name:           "gate off, no includeWhen",
+			gateEnabled:    false,
+			hasIncludeWhen: false,
+			want:           false,
+		},
+		{
+			name:           "gate on, no includeWhen",
+			gateEnabled:    true,
+			hasIncludeWhen: false,
+			want:           false,
+		},
+		{
+			name:           "gate on, includeWhen present",
+			gateEnabled:    true,
+			hasIncludeWhen: true,
+			want:           true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Toggle the global gate and restore it afterwards. This test
+			// mutates the shared FeatureGate, so it must not run in parallel.
+			if tt.gateEnabled {
+				require.NoError(t, FeatureGate.Set("DeferredSchemaResolution=true"))
+			} else {
+				require.NoError(t, FeatureGate.Set("DeferredSchemaResolution=false"))
+			}
+			t.Cleanup(func() {
+				require.NoError(t, FeatureGate.Set("DeferredSchemaResolution=false"))
+			})
+
+			assert.Equal(t, tt.want, DeferUnresolvedSchema(tt.hasIncludeWhen))
+		})
+	}
+}
+
 // TestKnownFeaturesContainsAllRegistered verifies that KnownFeatures() lists
 // all features that were registered in defaultKroFeatureGates.
 func TestKnownFeaturesContainsAllRegistered(t *testing.T) {

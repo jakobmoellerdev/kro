@@ -23,11 +23,13 @@ import (
 	"github.com/stretchr/testify/require"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	memory "k8s.io/client-go/discovery/cached/memory"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/restmapper"
 
 	expv1alpha1 "github.com/kubernetes-sigs/kro/api/v1alpha1"
+	"github.com/kubernetes-sigs/kro/pkg/features"
 	"github.com/kubernetes-sigs/kro/pkg/graphengine/testutil/generator"
 	testk8s "github.com/kubernetes-sigs/kro/pkg/testutil/k8s"
 )
@@ -1011,4 +1013,103 @@ func indexOf(xs []string, want string) int {
 		}
 	}
 	return -1
+}
+
+// deferredWidgetGraph builds a Graph with a def-sourced flag and a Template
+// targeting example.com/v1 Widget — a GVK the fake REST mapper does NOT know.
+// includeWhen is wired onto the Widget node only when guarded is true (the
+// author opt-in that DeferUnresolvedSchema requires).
+func deferredWidgetGraph(guarded bool) *expv1alpha1.Graph {
+	opts := []generator.GraphOption{
+		generator.WithNamespace("default"),
+		generator.WithDef("flag", map[string]any{"enabled": true}),
+		generator.WithTemplate("deferred", map[string]any{
+			"apiVersion": "example.com/v1", "kind": "Widget",
+			"metadata": map[string]any{"name": "w"},
+			"spec":     map[string]any{"size": "large"},
+		}),
+	}
+	if guarded {
+		opts = append(opts, generator.WithIncludeWhen("${flag.enabled}"))
+	}
+	return generator.NewGraph("g", opts...)
+}
+
+// TestCompile_DeferredSchema covers the deferred-schema-resolution path: a
+// Template whose literal GVK is absent from the REST mapper compiles into a
+// schema-less, lazily-resolved node instead of failing the build — but only
+// when the DeferredSchemaResolution gate is on AND the node carries a non-
+// empty includeWhen (author opt-in). This is distinct from a CEL-dynamic
+// template: the deferred node keeps DynamicGVK=false, contributes its literal
+// GroupKind to RequiredGroupKinds, and leaves Program.HasDynamicGVK false.
+//
+// Gate-sensitive: the feature gate is a global, so these subtests must NOT
+// run in parallel.
+func TestCompile_DeferredSchema(t *testing.T) {
+	t.Run("gate on + includeWhen defers into a schema-less node", func(t *testing.T) {
+		require.NoError(t, features.FeatureGate.Set("DeferredSchemaResolution=true"))
+		defer func() { _ = features.FeatureGate.Set("DeferredSchemaResolution=false") }()
+
+		prog, err := newTestCompiler(t).Compile(deferredWidgetGraph(true))
+		require.NoError(t, err)
+
+		n := prog.Nodes["deferred"]
+		require.NotNil(t, n)
+		assert.Equal(t, NodeKindTemplate, n.Kind)
+		assert.False(t, n.DynamicGVK, "a deferred literal-GVK node is NOT dynamic")
+		assert.True(t, n.GVR.Empty(), "no compile-time GVR — resolved lazily at apply")
+		assert.False(t, n.Namespaced, "scope resolved at apply time, not compile")
+
+		_, hasSchema := prog.NodeSchemas["deferred"]
+		assert.False(t, hasSchema, "deferred node publishes no schema (dyn)")
+
+		// The literal GroupKind is still contributed so the SchemaWatcher can
+		// subscribe to the exact CRD; HasDynamicGVK stays false (the key
+		// difference from a CEL-dynamic template).
+		assert.Contains(t, prog.RequiredGroupKinds, schema.GroupKind{Group: "example.com", Kind: "Widget"})
+		assert.False(t, prog.HasDynamicGVK, "a deferred literal-GVK node must not flip HasDynamicGVK")
+	})
+
+	t.Run("gate off keeps the missing GVK a hard failure", func(t *testing.T) {
+		// gate stays at its default (off).
+		_, err := newTestCompiler(t).Compile(deferredWidgetGraph(true))
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "no matches for kind")
+	})
+
+	t.Run("gate on but no includeWhen still fails fast", func(t *testing.T) {
+		require.NoError(t, features.FeatureGate.Set("DeferredSchemaResolution=true"))
+		defer func() { _ = features.FeatureGate.Set("DeferredSchemaResolution=false") }()
+
+		_, err := newTestCompiler(t).Compile(deferredWidgetGraph(false))
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "no matches for kind")
+	})
+
+	t.Run("a resolvable node may reference the deferred node's output as dyn", func(t *testing.T) {
+		require.NoError(t, features.FeatureGate.Set("DeferredSchemaResolution=true"))
+		defer func() { _ = features.FeatureGate.Set("DeferredSchemaResolution=false") }()
+
+		g := generator.NewGraph("g",
+			generator.WithNamespace("default"),
+			generator.WithDef("flag", map[string]any{"enabled": true}),
+			generator.WithTemplate("deferred", map[string]any{
+				"apiVersion": "example.com/v1", "kind": "Widget",
+				"metadata": map[string]any{"name": "w"},
+			}),
+			generator.WithIncludeWhen("${flag.enabled}"),
+			generator.WithTemplate("cm", map[string]any{
+				"apiVersion": "v1", "kind": "ConfigMap",
+				"metadata": map[string]any{"name": "cm"},
+				// The deferred node is schema-less, so this sub-field access
+				// type-checks as dyn and still records a dependency edge.
+				"data": map[string]any{"foo": "${deferred.status.foo}"},
+			}),
+		)
+		prog, err := newTestCompiler(t).Compile(g)
+		require.NoError(t, err)
+		require.NotNil(t, prog.Nodes["cm"])
+		assert.Contains(t, prog.Nodes["cm"].Dependencies, "deferred")
+		assert.Less(t, indexOf(prog.TopologicalOrder, "deferred"), indexOf(prog.TopologicalOrder, "cm"))
+	})
 }

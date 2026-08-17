@@ -5052,3 +5052,152 @@ func buildRGResourceForTest(b *Builder, p *parser.Parser, res *krov1alpha1.Resou
 	node, _, err := b.buildResourceNode(p, rs, instanceNamespaced)
 	return node, err
 }
+
+// setDeferredSchemaGate toggles the DeferredSchemaResolution feature gate for
+// the duration of the test and always restores it to disabled on cleanup.
+// This mutates the shared global FeatureGate, so callers must not run in
+// parallel with other gate-sensitive tests.
+func setDeferredSchemaGate(t *testing.T, enabled bool) {
+	t.Helper()
+	if enabled {
+		require.NoError(t, features.FeatureGate.Set("DeferredSchemaResolution=true"))
+	} else {
+		require.NoError(t, features.FeatureGate.Set("DeferredSchemaResolution=false"))
+	}
+	t.Cleanup(func() {
+		require.NoError(t, features.FeatureGate.Set("DeferredSchemaResolution=false"))
+	})
+}
+
+// deferredVPCResource returns a template resource whose target CRD
+// (unknown.k8s.aws/v1alpha1, kind VPC) is NOT known to the test RESTMapper,
+// making it an unresolvable (NoMatch) resource. includeWhen controls whether
+// it is eligible for deferral.
+func deferredVPCResource(id string, includeWhen []string) generator.ResourceGraphDefinitionOption {
+	return generator.WithResource(id, map[string]interface{}{
+		"apiVersion": "unknown.k8s.aws/v1alpha1", // Unknown API group -> NoMatch
+		"kind":       "VPC",
+		"metadata": map[string]interface{}{
+			"name": "${schema.spec.name}-vpc",
+		},
+	}, nil, includeWhen)
+}
+
+// TestGraphBuilder_DeferredSchemaResolution exercises the deferred schema
+// resolution contract for the classic graph builder: an unresolvable-CRD
+// template resource with a non-empty includeWhen compiles into a schema-less
+// deferred node (empty GVR, no published schema) when the
+// DeferredSchemaResolution gate is on, and still fails fast otherwise.
+//
+// These cases toggle the shared global feature gate, so this test must NOT be
+// run with t.Parallel().
+func TestGraphBuilder_DeferredSchemaResolution(t *testing.T) {
+	builder := newUnitTestBuilder()
+
+	t.Run("gate on with includeWhen defers unresolvable resource", func(t *testing.T) {
+		setDeferredSchemaGate(t, true)
+
+		rgd := generator.NewResourceGraphDefinition("test-deferred",
+			generator.WithSchema(
+				"Deferred", "v1alpha1",
+				map[string]interface{}{"name": "string"},
+				nil,
+			),
+			deferredVPCResource("vpc", []string{"${schema.spec.name != ''}"}),
+		)
+
+		g, err := builder.NewResourceGraphDefinition(rgd, defaultRGDConfig)
+		require.NoError(t, err)
+		require.NotNil(t, g)
+
+		// The instance CRD is still synthesized from the RGD schema.
+		require.NotNil(t, g.CRD)
+
+		// The deferred resource is present in the graph.
+		require.Contains(t, g.Nodes, "vpc")
+		assert.Contains(t, g.TopologicalOrder, "vpc")
+
+		// Deferred node carries an empty GVR (resolved lazily at apply time).
+		node := g.Nodes["vpc"]
+		require.NotNil(t, node)
+		assert.True(t, node.Meta.GVR.Empty(), "deferred node GVR should be empty, got %+v", node.Meta.GVR)
+
+		// No schema is published for a deferred node.
+		sch, ok := g.ResourceSchemas["vpc"]
+		assert.True(t, !ok || sch == nil, "deferred node should have no (or nil) resource schema, got %+v", sch)
+	})
+
+	t.Run("gate off fails fast with no matches for kind", func(t *testing.T) {
+		setDeferredSchemaGate(t, false)
+
+		rgd := generator.NewResourceGraphDefinition("test-deferred-gateoff",
+			generator.WithSchema(
+				"DeferredGateOff", "v1alpha1",
+				map[string]interface{}{"name": "string"},
+				nil,
+			),
+			deferredVPCResource("vpc", []string{"${schema.spec.name != ''}"}),
+		)
+
+		_, err := builder.NewResourceGraphDefinition(rgd, defaultRGDConfig)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "no matches for kind")
+	})
+
+	t.Run("gate on without includeWhen fails fast with no matches for kind", func(t *testing.T) {
+		setDeferredSchemaGate(t, true)
+
+		rgd := generator.NewResourceGraphDefinition("test-deferred-noinclude",
+			generator.WithSchema(
+				"DeferredNoInclude", "v1alpha1",
+				map[string]interface{}{"name": "string"},
+				nil,
+			),
+			deferredVPCResource("vpc", nil), // no includeWhen -> not eligible for deferral
+		)
+
+		_, err := builder.NewResourceGraphDefinition(rgd, defaultRGDConfig)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "no matches for kind")
+	})
+
+	t.Run("resolvable resource referencing deferred resource builds", func(t *testing.T) {
+		setDeferredSchemaGate(t, true)
+
+		rgd := generator.NewResourceGraphDefinition("test-deferred-ref",
+			generator.WithSchema(
+				"DeferredRef", "v1alpha1",
+				map[string]interface{}{"name": "string"},
+				// status expression referencing the deferred resource: declared
+				// as a dyn identifier, so this type-checks permissively.
+				map[string]interface{}{"vpcState": "${vpc.status.state}"},
+			),
+			// Deferred resource (unresolvable CRD, eligible via includeWhen).
+			deferredVPCResource("vpc", []string{"${schema.spec.name != ''}"}),
+			// Resolvable ConfigMap whose includeWhen references the deferred vpc.
+			generator.WithResource("cm", map[string]interface{}{
+				"apiVersion": "v1",
+				"kind":       "ConfigMap",
+				"metadata": map[string]interface{}{
+					"name": "${schema.spec.name}-cm",
+				},
+				"data": map[string]interface{}{
+					"key": "value",
+				},
+			}, nil, []string{"${vpc.status.state == 'available'}"}),
+		)
+
+		g, err := builder.NewResourceGraphDefinition(rgd, defaultRGDConfig)
+		require.NoError(t, err)
+		require.NotNil(t, g)
+
+		// Both resources exist; the resolvable ConfigMap has a real GVR.
+		require.Contains(t, g.Nodes, "vpc")
+		require.Contains(t, g.Nodes, "cm")
+		assert.True(t, g.Nodes["vpc"].Meta.GVR.Empty(), "deferred vpc node GVR should be empty")
+		assert.False(t, g.Nodes["cm"].Meta.GVR.Empty(), "resolvable configmap node GVR should be set")
+
+		// The ConfigMap depends on the deferred vpc via its includeWhen.
+		assert.Contains(t, g.Nodes["cm"].Meta.Dependencies, "vpc")
+	})
+}
