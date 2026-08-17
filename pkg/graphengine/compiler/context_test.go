@@ -128,12 +128,12 @@ func TestCompilationContext_BuildNode(t *testing.T) {
 			},
 		},
 		{
-			name: "unknown GVK fails schema resolution",
+			name: "unknown GVK fails REST mapping",
 			node: &expv1alpha1.Node{ID: "x", Template: rawExtensionFromObject(map[string]any{
 				"apiVersion": "example.com/v1", "kind": "Widget",
 				"metadata": map[string]any{"name": "w"},
 			})},
-			wantErr: "resolve schema",
+			wantErr: "no matches for kind",
 		},
 		{
 			name: "cluster-scoped target with a namespace is rejected",

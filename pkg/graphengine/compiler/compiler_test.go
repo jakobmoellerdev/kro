@@ -300,7 +300,7 @@ func TestCompile(t *testing.T) {
 				"apiVersion": "unknown.group/v1", "kind": "NotARealKind",
 				"metadata": map[string]any{"name": "x"},
 			})),
-			wantErr: "resolve schema",
+			wantErr: "no matches for kind",
 		},
 		{
 			name:    "node with zero kinds set",
@@ -531,13 +531,13 @@ func TestCompile(t *testing.T) {
 			wantErr: "",
 		},
 		{
-			name: "ref node with unknown target GVK fails schema resolution",
+			name: "ref node with unknown target GVK fails REST mapping",
 			graph: generator.NewGraph("g", generator.WithRef("r", &expv1alpha1.ExternalRef{
 				APIVersion: "totally.unknown/v999",
 				Kind:       "MissingKind",
 				Metadata:   expv1alpha1.ExternalRefMetadata{Name: "x"},
 			})),
-			wantErr: "resolve schema",
+			wantErr: "no matches for kind",
 		},
 		{
 			name: "expression with malformed CEL syntax fails parser",

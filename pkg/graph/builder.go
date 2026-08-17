@@ -262,7 +262,9 @@ func (b *Builder) CompileSource(src Source) (*Graph, *extv1.JSONSchemaProps, err
 			return nil, nil, fmt.Errorf("found resources with duplicate id %q", rs.ID)
 		}
 		nodes[rs.ID] = node
-		schemas[rs.ID] = nodeSchema
+		if nodeSchema != nil {
+			schemas[rs.ID] = nodeSchema
+		}
 	}
 
 	// Lightweight inspector env: declares identifier names only (enough to parse
@@ -302,7 +304,19 @@ func (b *Builder) CompileSource(src Source) (*Graph, *extv1.JSONSchemaProps, err
 	celSchemas := collectNodeSchemas(schemaCache, nodes, schemas)
 	celSchemas[SchemaVarName] = src.SchemaVarSchema()
 
-	typedEnv, typeProvider, err := krocel.TypedEnvironmentWithProvider(celSchemas)
+	// Deferred resource nodes (target CRD absent) publish no schema; declare
+	// them as dyn identifiers so expressions that reference them — including
+	// their own fields and any status/other-node references — type-check
+	// permissively rather than erroring on an unknown identifier. The graph
+	// engine re-validates them at instance compile once the CRD exists.
+	var deferredIDs []string
+	for id := range nodes {
+		if _, ok := schemas[id]; !ok {
+			deferredIDs = append(deferredIDs, id)
+		}
+	}
+
+	typedEnv, typeProvider, err := krocel.TypedEnvironmentWithIDsAndProvider(celSchemas, deferredIDs)
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to create typed CEL environment: %w", err)
 	}
@@ -317,6 +331,13 @@ func (b *Builder) CompileSource(src Source) (*Graph, *extv1.JSONSchemaProps, err
 	}
 
 	for id, node := range nodes {
+		if _, ok := schemas[id]; !ok {
+			// Deferred node: no schema to type-check its template against. Its
+			// dependency edges were already captured by buildDependencyGraph
+			// (from the raw expressions), and the graph engine validates its
+			// expressions permissively at instance compile. Skip here.
+			continue
+		}
 		if err := validateAndCompileNode(bc, node, inspector, schemas[id]); err != nil {
 			return nil, nil, fmt.Errorf("failed to validate resource %q: %w", id, err)
 		}
@@ -439,14 +460,25 @@ func (b *Builder) buildResourceNode(
 		return nil, nil, fmt.Errorf("failed to extract GVK from resource %s: %w", rs.ID, err)
 	}
 
+	// Resolve the REST mapping first: a typed NoMatch error means the target
+	// CRD is absent from the cluster. For an eligible conditional template
+	// resource (non-empty includeWhen) with the DeferredSchemaResolution gate
+	// on, defer it rather than failing the whole graph — the resource compiles
+	// as a schema-less node whose concrete GVK the graph engine resolves lazily
+	// at apply time, requeuing until the CRD appears. ExternalRefs are never
+	// deferred (v1 scope); any other mapping error stays fatal so typos in
+	// always-required resources still fail fast.
+	mapping, err := b.restMapper.RESTMapping(gvk.GroupKind(), gvk.Version)
+	if err != nil {
+		if !rs.ExternalRef && meta.IsNoMatchError(err) && features.DeferUnresolvedSchema(len(rs.IncludeWhen) > 0) {
+			return b.buildDeferredResourceNode(rs)
+		}
+		return nil, nil, fmt.Errorf("failed to get REST mapping for resource %s: %w", rs.ID, err)
+	}
+
 	resourceSchema, err := b.schemaResolver.ResolveSchema(gvk)
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to get schema for resource %s: %w", rs.ID, err)
-	}
-
-	mapping, err := b.restMapper.RESTMapping(gvk.GroupKind(), gvk.Version)
-	if err != nil {
-		return nil, nil, fmt.Errorf("failed to get REST mapping for resource %s: %w", rs.ID, err)
 	}
 	if err := validateTemplateConstraints(
 		rs.ID,
@@ -538,6 +570,62 @@ func (b *Builder) buildResourceNode(
 		ForEach:     forEachDimensions,
 	}
 	return node, resourceSchema, nil
+}
+
+// buildDeferredResourceNode builds a template resource node whose target CRD
+// is not present on the cluster yet. There is no schema to type against, so
+// field expressions are parsed schemaless; the node carries no GVR/scope and
+// publishes no schema (returns nil). The graph engine resolves the concrete
+// GVK lazily at apply time and requeues until the CRD appears. Only eligible
+// conditional resources reach here — see features.DeferUnresolvedSchema and
+// buildResourceNode's REST-mapping branch.
+func (b *Builder) buildDeferredResourceNode(rs ResourceSpec) (*Node, *spec.Schema, error) {
+	fieldDescriptors, _, err := parser.ParseSchemalessResource(rs.Object)
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to parse deferred resource %s: %w", rs.ID, err)
+	}
+
+	templateVariables := make([]*variable.ResourceField, 0, len(fieldDescriptors))
+	for _, fieldDescriptor := range fieldDescriptors {
+		templateVariables = append(templateVariables, &variable.ResourceField{
+			Kind:            variable.ResourceVariableKindStatic,
+			FieldDescriptor: fieldDescriptor,
+		})
+	}
+
+	readyWhen, err := parser.UnwrapExpressions(rs.ReadyWhen)
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to parse readyWhen expressions: %v", err)
+	}
+	includeWhen, err := parser.UnwrapExpressions(rs.IncludeWhen)
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to parse includeWhen expressions: %v", err)
+	}
+	forEachDimensions, err := parseForEachDimensions(rs.ForEach)
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to parse forEach dimensions: %v", err)
+	}
+
+	nodeType := NodeTypeResource
+	if len(forEachDimensions) > 0 {
+		nodeType = NodeTypeCollection
+	}
+
+	node := &Node{
+		Meta: NodeMeta{
+			ID:    rs.ID,
+			Index: rs.Order,
+			Type:  nodeType,
+			// GVR and Namespaced intentionally left zero: resolved lazily by
+			// the executor once the target CRD exists.
+		},
+		Template:    &unstructured.Unstructured{Object: rs.Object},
+		Variables:   templateVariables,
+		IncludeWhen: includeWhen,
+		ReadyWhen:   readyWhen,
+		ForEach:     forEachDimensions,
+	}
+	return node, nil, nil
 }
 
 // buildDependencyGraph builds the dependency graph between the nodes in the

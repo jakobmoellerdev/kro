@@ -28,6 +28,7 @@ import (
 
 	expv1alpha1 "github.com/kubernetes-sigs/kro/api/v1alpha1"
 	krocel "github.com/kubernetes-sigs/kro/pkg/cel"
+	"github.com/kubernetes-sigs/kro/pkg/features"
 	"github.com/kubernetes-sigs/kro/pkg/graph/parser"
 	"github.com/kubernetes-sigs/kro/pkg/graph/schema"
 	"github.com/kubernetes-sigs/kro/pkg/graph/variable"
@@ -185,7 +186,7 @@ func (ctx *CompilationContext) buildNode(p *parser.Parser, n *expv1alpha1.Node, 
 	// payload are still type-checked later against the typed env; only the
 	// node's own field types fall back to dyn.
 	if kind == NodeKindTemplate && isDynamicGVK(payload) {
-		return ctx.buildDynamicTemplateNode(n, order, payload)
+		return ctx.buildSchemalessTemplateNode(n, order, payload, true /* dynamic */)
 	}
 
 	// Template/Ref all target a real GVK. Resolve schema and
@@ -200,13 +201,23 @@ func (ctx *CompilationContext) buildNode(p *parser.Parser, n *expv1alpha1.Node, 
 	if err != nil {
 		return nil, nil, err
 	}
+	// Resolve the REST mapping first: it returns a typed NoMatch error when
+	// the target CRD is absent from the cluster. For an eligible conditional
+	// Template (non-empty includeWhen) with the DeferredSchemaResolution gate
+	// on, that absence is a soft "not yet" — compile a schema-less node whose
+	// concrete GVK is resolved lazily at apply time, exactly like a dynamic-
+	// GVK template. Any other mapping error, or an ineligible resource, stays
+	// fatal so typos in always-required resources still fail fast.
+	mapping, err := ctx.restMapper.RESTMapping(gvk.GroupKind(), gvk.Version)
+	if err != nil {
+		if kind == NodeKindTemplate && meta.IsNoMatchError(err) && features.DeferUnresolvedSchema(len(n.IncludeWhen) > 0) {
+			return ctx.buildSchemalessTemplateNode(n, order, payload, false /* dynamic */)
+		}
+		return nil, nil, fmt.Errorf("REST mapping for %s: %w", gvk, err)
+	}
 	sch, err := ctx.schemaResolver.ResolveSchema(gvk)
 	if err != nil {
 		return nil, nil, fmt.Errorf("resolve schema for %s: %w", gvk, err)
-	}
-	mapping, err := ctx.restMapper.RESTMapping(gvk.GroupKind(), gvk.Version)
-	if err != nil {
-		return nil, nil, fmt.Errorf("REST mapping for %s: %w", gvk, err)
 	}
 	if mapping.Scope.Name() != meta.RESTScopeNameNamespace {
 		// Cluster-scoped targets must not carry a namespace; otherwise the
@@ -257,20 +268,33 @@ func (ctx *CompilationContext) buildNode(p *parser.Parser, n *expv1alpha1.Node, 
 	}, sch, nil
 }
 
-// buildDynamicTemplateNode compiles a Template whose apiVersion or kind is a
-// CEL expression. There is no compile-time GVK, so we skip schema resolution
-// and REST mapping, parse the payload schemaless, and mark the node dynamic.
-// metadata is still required (templates are user-authored) and apiVersion/
-// kind must be non-empty strings, but the version segment isn't validated —
-// it isn't a literal version yet. The node publishes no schema (nil), so
-// downstream references see it as dyn until the executor pins the GVK.
-func (ctx *CompilationContext) buildDynamicTemplateNode(n *expv1alpha1.Node, order int, payload map[string]interface{}) (*Node, *spec.Schema, error) {
-	if err := validateDynamicTemplateStructure(payload); err != nil {
-		return nil, nil, err
+// buildSchemalessTemplateNode compiles a Template that has no usable compile-
+// time schema and whose concrete GVK is therefore resolved lazily at apply
+// time. Two entry conditions reach it:
+//
+//   - dynamic == true: apiVersion or kind is a CEL expression, so the GVK is
+//     unknowable until reconcile. Only the structural shape is validated
+//     (validateDynamicTemplateStructure) — the version segment isn't a literal
+//     yet, so the version regex is not enforced.
+//   - dynamic == false: apiVersion/kind are literal but the target CRD is
+//     absent and the resource is eligible to defer (see DeferUnresolvedSchema).
+//     The caller has already run validateKubernetesObjectStructure, so the
+//     structure is known-good; the node keeps its literal apiVersion/kind so
+//     the SchemaWatcher/emitSchemaDependencies can subscribe to the exact
+//     GroupKind and the executor can retry the mapping once the CRD lands.
+//
+// In both cases the payload is parsed schemaless and the node publishes no
+// schema (nil), so downstream references see it as dyn until the executor
+// pins the GVK. DynamicGVK records which entry condition applied.
+func (ctx *CompilationContext) buildSchemalessTemplateNode(n *expv1alpha1.Node, order int, payload map[string]interface{}, dynamic bool) (*Node, *spec.Schema, error) {
+	if dynamic {
+		if err := validateDynamicTemplateStructure(payload); err != nil {
+			return nil, nil, err
+		}
 	}
 	descriptors, _, err := parser.ParseSchemalessResource(payload)
 	if err != nil {
-		return nil, nil, fmt.Errorf("parse dynamic template payload: %w", err)
+		return nil, nil, fmt.Errorf("parse schemaless template payload: %w", err)
 	}
 	forEach, err := parseForEachDimensions(n.ForEach)
 	if err != nil {
@@ -284,7 +308,7 @@ func (ctx *CompilationContext) buildDynamicTemplateNode(n *expv1alpha1.Node, ord
 		ID:          n.ID,
 		Index:       order,
 		Kind:        NodeKindTemplate,
-		DynamicGVK:  true,
+		DynamicGVK:  dynamic,
 		Object:      &unstructured.Unstructured{Object: payload},
 		Variables:   fieldDescriptorsToVariables(descriptors),
 		ForEach:     forEach,

@@ -746,12 +746,16 @@ func (s *Simple) applySubgraph(ctx context.Context, rt *runtime.Runtime, w watch
 	return applied, unresolved, applyErr
 }
 
-// mappingFor returns the GVR and REST scope to apply obj under. Static
-// nodes use the GVR resolved at compile time. Dynamic-GVK nodes resolve
-// the rendered object's concrete GVK through the live REST mapper; a
-// missing mapping (CRD not installed yet) becomes errSchemaNotReady.
+// mappingFor returns the GVR and REST scope to apply obj under. Nodes whose
+// GVR was resolved at compile time (a literal apiVersion+kind whose CRD was
+// present) use it directly. Nodes with an empty GVR resolve the rendered
+// object's concrete GVK through the live REST mapper: this covers both
+// dynamic-GVK templates (apiVersion/kind are CEL expressions) and deferred
+// templates (literal GVK whose CRD was absent at compile time). A missing
+// mapping (CRD not installed yet) becomes errSchemaNotReady so the reconcile
+// requeues and retries once the CRD appears.
 func (s *Simple) mappingFor(n *runtime.Node, obj *unstructured.Unstructured) (schema.GroupVersionResource, bool, error) {
-	if !n.DynamicGVK() {
+	if !n.GVR().Empty() {
 		return n.GVR(), n.Namespaced(), nil
 	}
 	gvk := obj.GroupVersionKind()

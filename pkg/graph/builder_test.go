@@ -315,7 +315,7 @@ func TestGraphBuilder_Validation(t *testing.T) {
 				}, nil, nil),
 			},
 			wantErr: true,
-			errMsg:  "schema not found",
+			errMsg:  "no matches for kind",
 		},
 		{
 			name: "invalid resource id with operator",
@@ -566,7 +566,7 @@ func TestGraphBuilder_Validation(t *testing.T) {
 				}, nil, nil),
 			},
 			wantErr: true,
-			errMsg:  "schema not found",
+			errMsg:  "no matches for kind",
 		},
 		{
 			name: "invalid instance spec field type",

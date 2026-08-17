@@ -40,6 +40,16 @@ const (
 	// Graph). When disabled (the default), the Graph controller is not started
 	// and existing ResourceGraphDefinition behavior is unaffected.
 	GraphKind featuregate.Feature = "GraphKind"
+
+	// DeferredSchemaResolution lets an RGD compile and partially reconcile even
+	// when some of its resource types (CRDs) are not present on the cluster yet.
+	// A resource whose target CRD is absent is compiled as a schema-less node
+	// whose GVK is resolved lazily at apply time (the same path dynamic-GVK
+	// templates already take) instead of failing the whole graph build. To keep
+	// a typo in an always-required resource failing fast, deferral additionally
+	// requires an explicit conditionality signal on the resource (a non-empty
+	// includeWhen) — see DeferUnresolvedSchema.
+	DeferredSchemaResolution featuregate.Feature = "DeferredSchemaResolution"
 )
 
 // defaultKroFeatureGates consists of all known KRO-specific feature keys.
@@ -50,6 +60,7 @@ var defaultKroFeatureGates = map[featuregate.Feature]featuregate.FeatureSpec{
 	InstanceConditionMetrics: {Default: false, PreRelease: featuregate.Alpha},
 	CELOmitFunction:          {Default: false, PreRelease: featuregate.Alpha},
 	GraphKind:                {Default: false, PreRelease: featuregate.Alpha},
+	DeferredSchemaResolution: {Default: false, PreRelease: featuregate.Alpha},
 }
 
 // FeatureGate is the shared global MutableFeatureGate for KRO.
@@ -61,4 +72,17 @@ func init() {
 	if err := FeatureGate.Add(defaultKroFeatureGates); err != nil {
 		panic(err)
 	}
+}
+
+// DeferUnresolvedSchema is the single policy point deciding whether a resource
+// whose target CRD cannot be resolved should be deferred (compiled as a
+// lazily-resolved, schema-less node) rather than failing the entire graph
+// build. Deferral requires BOTH the DeferredSchemaResolution feature gate
+// (cluster-operator opt-in) AND an explicit conditionality signal on the
+// resource — a non-empty includeWhen (author opt-in). The second condition
+// preserves fast, clear failures for typos in always-required resources while
+// enabling self-bootstrapping platforms whose conditional resources reference
+// CRDs that appear only later.
+func DeferUnresolvedSchema(hasIncludeWhen bool) bool {
+	return hasIncludeWhen && FeatureGate.Enabled(DeferredSchemaResolution)
 }
