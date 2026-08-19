@@ -119,7 +119,11 @@ func (c *Controller) reconcileViaGraphEngine(
 	mark.InstanceManaged()
 
 	// Build a per-reconcile Runtime.
-	rt, _, err := rgdadapter.BuildRuntimeForInstance(rgd, inst, c.graphEngineCompiler)
+	var rtOpts []geruntime.Option
+	if c.reconcileConfig.MaxCollectionSize > 0 {
+		rtOpts = append(rtOpts, geruntime.WithMaxCollectionSize(c.reconcileConfig.MaxCollectionSize))
+	}
+	rt, _, err := rgdadapter.BuildRuntimeForInstance(rgd, inst, c.graphEngineCompiler, rtOpts...)
 	if err != nil {
 		log.Error(err, "graph-engine: BuildRuntimeForInstance failed")
 		// Mark the instance so the operator can see the build failure.
@@ -183,7 +187,7 @@ func (c *Controller) reconcileViaGraphEngine(
 	// resolved and apply had no hard error do we prune resources that left the
 	// desired set, then shrink the inventory to the current set after a
 	// conflict-free prune.
-	fullyResolved := applyErr == nil && len(applyResult.Unresolved) == 0
+	fullyResolved := !hardErr && len(applyResult.Unresolved) == 0
 	if invErr := c.reconcileApplySetInventory(ctx, log, inst, applyResult.Applied, fullyResolved); invErr != nil {
 		log.V(1).Info("graph-engine: ApplySet inventory/prune failed (non-fatal)", "error", invErr)
 	}
@@ -201,11 +205,14 @@ func (c *Controller) reconcileViaGraphEngine(
 		return err
 	}
 
-	// Classify soft-not-ready as a requeue instead of a hard reconcile failure.
-	if applyErr != nil && errors.Is(applyErr, executor.ErrNotReady) {
+	// All apply outcomes (success, soft-not-ready, or retryable apply error)
+	// have their conditions and status persisted above. Requeue on any apply error
+	// with the configured interval so the instance retries without counting as
+	// a reconcile-level infrastructural error.
+	if applyErr != nil {
 		return requeue.NeededAfter(applyErr, c.reconcileConfig.DefaultRequeueDuration)
 	}
-	return applyErr
+	return nil
 }
 
 // requeueUntilRGDSpecPopulated handles a revision entry with no RGDSpec. There

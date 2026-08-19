@@ -209,8 +209,8 @@ func TestBuildRuntimeForInstance_SchemaOverride(t *testing.T) {
 
 		_, _, err := BuildRuntimeForInstance(rgd, testInstance("demo", "default"), stub)
 		require.NoError(t, err)
-		assert.Equal(t, 1, stub.gotOpts,
-			"a declared SimpleSchema must be passed through as a node schema override")
+		assert.Equal(t, 2, stub.gotOpts,
+			"a declared SimpleSchema must be passed through as a node schema override alongside WithLiteralNode")
 	})
 
 	t.Run("no declared schema passes no options", func(t *testing.T) {
@@ -219,8 +219,8 @@ func TestBuildRuntimeForInstance_SchemaOverride(t *testing.T) {
 
 		_, _, err := BuildRuntimeForInstance(testRGD(nil), testInstance("demo", "default"), stub)
 		require.NoError(t, err)
-		assert.Zero(t, stub.gotOpts,
+		assert.Equal(t, 1, stub.gotOpts,
 			"without a declared schema the schema node stays untyped rather than "+
-				"being inferred from this instance's values")
+				"being inferred from this instance's values (WithLiteralNode only)")
 	})
 }

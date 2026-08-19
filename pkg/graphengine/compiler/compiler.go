@@ -109,6 +109,18 @@ type CompileOption func(*compileOptions)
 
 type compileOptions struct {
 	nodeSchemaOverrides map[string]*spec.Schema
+	literalNodes        map[string]struct{}
+}
+
+// WithLiteralNode marks a node (such as a Def node) as pure literal data,
+// skipping expression parsing inside its payload.
+func WithLiteralNode(nodeID string) CompileOption {
+	return func(o *compileOptions) {
+		if o.literalNodes == nil {
+			o.literalNodes = make(map[string]struct{})
+		}
+		o.literalNodes[nodeID] = struct{}{}
+	}
 }
 
 // WithNodeSchemaOverride declares the OpenAPI schema a node publishes into
@@ -145,6 +157,8 @@ func (c *Compiler) CompileWithOptions(g *expv1alpha1.Graph, opts ...CompileOptio
 	}
 	ctx := c.rootContext()
 	ctx.nodeSchemaOverrides = co.nodeSchemaOverrides
+	ctx.literalNodes = co.literalNodes
+
 	prog, _, err := ctx.compileFrame(graph.Spec.Nodes, true)
 	if err != nil {
 		return nil, err

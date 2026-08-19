@@ -27,7 +27,6 @@ import (
 	"k8s.io/apimachinery/pkg/util/rand"
 
 	krov1alpha1 "github.com/kubernetes-sigs/kro/api/v1alpha1"
-	"github.com/kubernetes-sigs/kro/pkg/controller/resourcegraphdefinition"
 	"github.com/kubernetes-sigs/kro/pkg/testutil/generator"
 )
 
@@ -174,45 +173,4 @@ var _ = Describe("Validation", func() {
 			Expect(env.Client.Delete(ctx, rgd)).To(Succeed())
 		})
 	})
-
-	Context("ForEach Collections", func() {
-
-	})
 })
-
-func validResourceDef() map[string]interface{} {
-	return map[string]interface{}{
-		"apiVersion": "v1",
-		"kind":       "ConfigMap",
-		"metadata": map[string]interface{}{
-			"name": "test-config",
-		},
-	}
-}
-
-// expectRGDInactiveWithError waits for the RGD to become inactive and validates
-// that the Ready condition contains the expected error message substring.
-func expectRGDInactiveWithError(
-	ctx SpecContext,
-	rgd *krov1alpha1.ResourceGraphDefinition,
-	expectedErrorSubstring string,
-) {
-	Eventually(func(g Gomega, ctx SpecContext) {
-		err := env.Client.Get(ctx, types.NamespacedName{
-			Name: rgd.Name,
-		}, rgd)
-		g.Expect(err).ToNot(HaveOccurred())
-		g.Expect(rgd.Status.State).To(Equal(krov1alpha1.ResourceGraphDefinitionStateInactive))
-
-		var condition *krov1alpha1.Condition
-		for _, cond := range rgd.Status.Conditions {
-			if cond.Type == resourcegraphdefinition.Ready {
-				condition = &cond
-				break
-			}
-		}
-		g.Expect(condition).ToNot(BeNil())
-		g.Expect(condition.Status).To(Equal(metav1.ConditionFalse))
-		g.Expect(*condition.Message).To(ContainSubstring(expectedErrorSubstring))
-	}, 10*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
-}

@@ -443,16 +443,16 @@ func TestCompile(t *testing.T) {
 			wantErr: "apiVersion",
 		},
 		{
-			name: "template version segment that isn't v<N>[alpha|beta<N>] is rejected",
+			name: "template missing version segment is rejected",
 			graph: generator.NewGraph("g", generator.WithRawNode(expv1alpha1.Node{
 				ID: "x",
 				Template: rawExtensionFromObject(map[string]any{
-					"apiVersion": "apps/wat",
+					"apiVersion": "apps/",
 					"kind":       "Deployment",
 					"metadata":   map[string]any{"name": "x"},
 				}),
 			})),
-			wantErr: "not a valid Kubernetes version",
+			wantErr: "missing version",
 		},
 		{
 			name: "readyWhen self-reference is filtered out of the dependency graph",
@@ -764,7 +764,8 @@ func TestValidateKubernetesObjectStructure(t *testing.T) {
 		{name: "apiVersion not string", obj: map[string]any{"apiVersion": 1, "kind": "Pod"}, wantErr: "non-empty string"},
 		{name: "kind empty", obj: map[string]any{"apiVersion": "v1", "kind": ""}, wantErr: "non-empty string"},
 		{name: "malformed apiVersion (too many slashes)", obj: map[string]any{"apiVersion": "a/b/c", "kind": "X"}, wantErr: "apiVersion"},
-		{name: "non-conventional version segment", obj: map[string]any{"apiVersion": "apps/wat", "kind": "X"}, wantErr: "not a valid Kubernetes version"},
+		{name: "missing version segment", obj: map[string]any{"apiVersion": "apps/", "kind": "X"}, wantErr: "missing version"},
+		{name: "non-conventional version segment", obj: map[string]any{"apiVersion": "apps/wat", "kind": "X"}},
 		{name: "missing metadata when required", obj: map[string]any{"apiVersion": "v1", "kind": "Pod"}, requireMetadata: true, wantErr: "metadata"},
 		{name: "metadata wrong type", obj: map[string]any{"apiVersion": "v1", "kind": "Pod", "metadata": "wat"}, requireMetadata: true, wantErr: "metadata"},
 	}

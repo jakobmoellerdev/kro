@@ -67,27 +67,6 @@ func getConditionTypes(inst *unstructured.Unstructured) []string {
 	return out
 }
 
-// expectRGDRejected asserts that the RGD becomes Inactive with a Ready
-// condition message containing msgSubstring.
-func expectRGDRejected(ctx SpecContext, rgd *krov1alpha1.ResourceGraphDefinition, msgSubstring string) {
-	GinkgoHelper()
-	Eventually(func(g Gomega) {
-		g.Expect(env.Client.Get(ctx, types.NamespacedName{Name: rgd.Name}, rgd)).To(Succeed())
-		g.Expect(rgd.Status.State).To(Equal(krov1alpha1.ResourceGraphDefinitionStateInactive))
-
-		var ready *krov1alpha1.Condition
-		for _, c := range rgd.Status.Conditions {
-			if string(c.Type) == ctrlinstance.Ready {
-				ready = &c
-				break
-			}
-		}
-		g.Expect(ready).ToNot(BeNil())
-		g.Expect(ready.Message).ToNot(BeNil())
-		g.Expect(*ready.Message).To(ContainSubstring(msgSubstring))
-	}).WithContext(ctx).WithTimeout(20 * time.Second).WithPolling(time.Second).Should(Succeed())
-}
-
 // createInstanceWithCleanup creates the instance and registers a cleanup
 // that deletes it and waits for finalization. Instances must be fully
 // deleted before the RGD's own cleanup runs: RGD deletion deregisters the

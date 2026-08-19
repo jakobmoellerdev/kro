@@ -26,9 +26,6 @@ import (
 var (
 	nodeIDRegex = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9]*$`)
 
-	// kubernetesVersionRegex matches `v1`, `v1alpha1`, `v2beta3`, etc.
-	kubernetesVersionRegex = regexp.MustCompile(`^v\d+(?:(?:alpha|beta)\d+)?$`)
-
 	// celReservedSymbols is the CEL grammar's reserved word list. No
 	// identifier may collide with these — they would parse as keywords.
 	celReservedSymbols = sets.NewString(

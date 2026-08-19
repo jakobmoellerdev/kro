@@ -31,6 +31,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	expv1alpha1 "github.com/kubernetes-sigs/kro/api/v1alpha1"
+	"github.com/kubernetes-sigs/kro/pkg/controller/instance/applyset"
 	"github.com/kubernetes-sigs/kro/pkg/graphengine/compiler"
 	"github.com/kubernetes-sigs/kro/pkg/graphengine/runtime"
 	"github.com/kubernetes-sigs/kro/pkg/graphengine/watchrouter"
@@ -450,7 +451,13 @@ func (s *Simple) applyTemplate(ctx context.Context, rt *runtime.Runtime, w watch
 	var itemFailures []error
 	for i, obj := range desired {
 		s.defaultNamespace(rt, mappings[i].namespaced, obj)
+		if mappings[i].namespaced && obj.GetNamespace() == "" {
+			return applied, fmt.Errorf("node %q: namespaced resource %s/%s must set metadata.namespace when the instance is cluster-scoped", n.ID(), obj.GetKind(), obj.GetName())
+		}
 		stampKROMeta(rt, n, obj, i, size)
+		if s.LabelInjector != nil {
+			s.LabelInjector(obj)
+		}
 		// Collection nodes register ONE selector-based watch for the whole
 		// node (keyed by NodeID, matching every item by label) instead of N
 		// scalar watches — the coordinator keys state by NodeID, so per-item
@@ -487,6 +494,22 @@ func (s *Simple) applyTemplate(ctx context.Context, rt *runtime.Runtime, w watch
 				deletingErr = de
 			}
 			continue
+		}
+
+		// ApplySet ownership conflict check: if the live object already belongs
+		// to another ApplySet, do not overwrite it.
+		if current != nil {
+			currentApplySetID := current.GetLabels()[applyset.ApplysetPartOfLabel]
+			desiredApplySetID := obj.GetLabels()[applyset.ApplysetPartOfLabel]
+			if currentApplySetID != "" && desiredApplySetID != "" && currentApplySetID != desiredApplySetID {
+				return applied, &applyset.ApplySetConflictError{
+					ResourceName:      obj.GetName(),
+					ResourceNamespace: obj.GetNamespace(),
+					ResourceGVK:       obj.GroupVersionKind().String(),
+					CurrentApplySetID: currentApplySetID,
+					DesiredApplySetID: desiredApplySetID,
+				}
+			}
 		}
 
 		if err := s.ssaApply(ctx, obj); err != nil {
@@ -807,7 +830,7 @@ func (s *Simple) watchCollection(w watchrouter.Watcher, n *runtime.Node, gvr sch
 	return w.Watch(watchrouter.WatchRequest{
 		NodeID:    n.ID(),
 		GVR:       gvr,
-		Namespace: sample.GetNamespace(),
+		Namespace: "",
 		Selector:  labels.SelectorFromSet(set),
 	})
 }
@@ -827,8 +850,5 @@ func (s *Simple) defaultNamespace(rt *runtime.Runtime, namespaced bool, obj *uns
 // ssaApply server-side applies obj with the graph-engine field manager. We
 // force ownership so re-applies after a hand-edit converge back.
 func (s *Simple) ssaApply(ctx context.Context, obj *unstructured.Unstructured) error {
-	if s.LabelInjector != nil {
-		s.LabelInjector(obj)
-	}
 	return s.Client.Patch(ctx, obj, client.Apply, client.FieldOwner(FieldManager), client.ForceOwnership)
 }

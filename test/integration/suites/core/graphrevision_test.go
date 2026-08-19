@@ -22,7 +22,6 @@ import (
 	. "github.com/onsi/gomega"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
-	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/labels"
@@ -476,15 +475,6 @@ func listGraphRevisions(ctx SpecContext, rgdName string) []internalv1alpha1.Grap
 	return list.Items
 }
 
-func findGRCondition(conditions []krov1alpha1.Condition, t krov1alpha1.ConditionType) *krov1alpha1.Condition {
-	for i := range conditions {
-		if conditions[i].Type == t {
-			return &conditions[i]
-		}
-	}
-	return nil
-}
-
 func findRGDCondition(conditions []krov1alpha1.Condition, t krov1alpha1.ConditionType) *krov1alpha1.Condition {
 	for i := range conditions {
 		if conditions[i].Type == t {
@@ -558,118 +548,6 @@ func configmapRGD(name, kind string) *krov1alpha1.ResourceGraphDefinition {
 		}, nil, nil),
 	)
 }
-
-// createRGDWithRevisions creates a configmap RGD, waits for it to become active,
-// then mutates the spec n-1 additional times to produce exactly n revisions.
-// Returns the RGD name and kind for further operations.
-//
-//nolint:unparam // Keep the helper generic for tests that vary retained revision counts.
-func createRGDWithRevisions(ctx SpecContext, rgdName, kind string, n int) {
-	rgd := configmapRGD(rgdName, kind)
-	ExpectWithOffset(1, env.Client.Create(ctx, rgd)).To(Succeed())
-
-	// Wait for active + revision 1
-	EventuallyWithOffset(1, func(g Gomega) {
-		fresh := &krov1alpha1.ResourceGraphDefinition{}
-		err := env.Client.Get(ctx, types.NamespacedName{Name: rgdName}, fresh)
-		g.Expect(err).ToNot(HaveOccurred())
-		g.Expect(fresh.Status.State).To(Equal(krov1alpha1.ResourceGraphDefinitionStateActive))
-		g.Expect(listGraphRevisions(ctx, rgdName)).To(HaveLen(1))
-	}, 20*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
-
-	// Mutate resource template n-1 times to produce revisions 2..n
-	for i := 2; i <= n; i++ {
-		updateRGDTemplate(ctx, rgdName, fmt.Sprintf("rev-%d", i))
-		expectedRevision := int64(i)
-		EventuallyWithOffset(1, func(g Gomega) {
-			fresh := &krov1alpha1.ResourceGraphDefinition{}
-			err := env.Client.Get(ctx, types.NamespacedName{Name: rgdName}, fresh)
-			g.Expect(err).ToNot(HaveOccurred())
-			g.Expect(fresh.Status.LastIssuedRevision).To(BeNumerically(">=", expectedRevision))
-		}, 20*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
-	}
-
-	// Wait for all n revisions to exist
-	EventuallyWithOffset(1, func(g Gomega) {
-		g.Expect(listGraphRevisions(ctx, rgdName)).To(HaveLen(n))
-	}, 20*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
-}
-
-// updateRGDTemplate updates the configmap RGD's resource template to trigger a
-// new revision. Each call adds a unique label to the ConfigMap template so the
-// spec hash changes without touching the schema.
-func updateRGDTemplate(ctx SpecContext, rgdName, label string) {
-	EventuallyWithOffset(1, func(g Gomega) {
-		fresh := &krov1alpha1.ResourceGraphDefinition{}
-		err := env.Client.Get(ctx, types.NamespacedName{Name: rgdName}, fresh)
-		g.Expect(err).ToNot(HaveOccurred())
-		template := `{"apiVersion":"v1","kind":"ConfigMap",` +
-			`"metadata":{"name":"cm-${schema.metadata.name}",` +
-			`"labels":{"revision":"%s"}},"data":{"key":"${schema.spec.data}"}}`
-		fresh.Spec.Resources[0].Template.Raw = []byte(fmt.Sprintf(template, label))
-		err = env.Client.Update(ctx, fresh)
-		g.Expect(err).ToNot(HaveOccurred())
-	}, 30*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
-}
-
-// emulateGCForRGD manually deletes GraphRevisions that have a deletionTimestamp,
-// emulating what the Kubernetes garbage collector would do on cascade delete.
-// envtest does not run a GC controller, so ownerReference-based cascade
-// deletion doesn't work. Only revisions already marked for deletion are removed.
-func emulateGCForRGD(ctx SpecContext, rgdName string) {
-	list := &internalv1alpha1.GraphRevisionList{}
-	sel := labels.SelectorFromSet(map[string]string{
-		metadata.ResourceGraphDefinitionNameLabel: rgdName,
-	})
-	ExpectWithOffset(1, env.Client.List(ctx, list, &client.ListOptions{LabelSelector: sel})).To(Succeed())
-
-	for i := range list.Items {
-		gr := &list.Items[i]
-		if !gr.DeletionTimestamp.IsZero() {
-			// Remove finalizer so the API server can complete deletion
-			gr.Finalizers = nil
-			ExpectWithOffset(1, env.Client.Update(ctx, gr)).To(Succeed())
-		} else {
-			// Not marked for deletion — delete it explicitly (emulate GC marking + deletion)
-			ExpectWithOffset(1, env.Client.Delete(ctx, gr)).To(Succeed())
-		}
-	}
-
-	EventuallyWithOffset(1, func(g Gomega) {
-		remaining := &internalv1alpha1.GraphRevisionList{}
-		g.Expect(env.Client.List(ctx, remaining, &client.ListOptions{LabelSelector: sel})).To(Succeed())
-		g.Expect(remaining.Items).To(BeEmpty())
-	}, 30*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
-}
-
-// emulateOrphanDeleteForRGD emulates DeletePropagationOrphan in envtest by
-// stripping ownerReferences from all GraphRevisions first, then deleting the
-// RGD. Without ownerReferences, envtest won't cascade-delete the GRs.
-// This matches the end state of a real orphan deletion: RGD gone, GRs alive
-// with no owner.
-func emulateOrphanDeleteForRGD(ctx SpecContext, rgdName string) {
-	// Strip ownerReferences from all GRs
-	for _, gr := range listGraphRevisions(ctx, rgdName) {
-		gr.OwnerReferences = nil
-		ExpectWithOffset(1, env.Client.Update(ctx, &gr)).To(Succeed())
-	}
-
-	// Now delete the RGD — GRs have no ownerRef so they won't be cascade-deleted
-	rgd := &krov1alpha1.ResourceGraphDefinition{
-		ObjectMeta: metav1.ObjectMeta{Name: rgdName},
-	}
-	ExpectWithOffset(1, env.Client.Delete(ctx, rgd)).To(Succeed())
-
-	// Wait for RGD to be gone
-	EventuallyWithOffset(1, func(g Gomega) {
-		err := env.Client.Get(ctx, types.NamespacedName{Name: rgdName}, &krov1alpha1.ResourceGraphDefinition{})
-		g.Expect(apierrors.IsNotFound(err)).To(BeTrue())
-	}, 30*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
-}
-
-var _ = Describe("GraphRevision Adoption", func() {
-
-})
 
 func invalidConfigmapRGD(name, kind string) *krov1alpha1.ResourceGraphDefinition {
 	return generator.NewResourceGraphDefinition(name,

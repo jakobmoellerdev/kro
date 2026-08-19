@@ -49,6 +49,7 @@ func BuildRuntimeForInstance(
 	rgd *v1alpha1.ResourceGraphDefinition,
 	instance *unstructured.Unstructured,
 	c Compiler,
+	opts ...runtime.Option,
 ) (*runtime.Runtime, *v1alpha1.Graph, error) {
 	if rgd == nil {
 		return nil, nil, fmt.Errorf("rgdadapter: rgd is required")
@@ -83,7 +84,9 @@ func BuildRuntimeForInstance(
 	// Step 4: compile. The `schema` def node is typed from the RGD's
 	// declared SimpleSchema (override), not inferred from the current
 	// instance value — a fresh instance missing fields must still compile.
-	var compileOpts []compiler.CompileOption
+	// The `schema` def node is also marked literal so instance data is not
+	// parsed as CEL expressions.
+	compileOpts := []compiler.CompileOption{compiler.WithLiteralNode(SchemaNodeID)}
 	if rgd.Spec.Schema != nil {
 		schemaVarSchema, err := graph.InstanceSchemaForCEL(rgd)
 		if err != nil {
@@ -97,6 +100,6 @@ func BuildRuntimeForInstance(
 	}
 
 	// Step 5: construct the runtime.
-	rt := runtime.New(prog, g)
+	rt := runtime.New(prog, g, opts...)
 	return rt, g, nil
 }

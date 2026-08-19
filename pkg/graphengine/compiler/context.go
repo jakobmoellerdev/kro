@@ -69,6 +69,10 @@ type CompilationContext struct {
 	// with the RGD's declared SimpleSchema, which stays stable across
 	// reconciles even when the instance is missing fields.
 	nodeSchemaOverrides map[string]*spec.Schema
+
+	// literalNodes declares nodes whose payloads are treated as literal data
+	// (no CEL expression parsing). Used for instance seed nodes.
+	literalNodes map[string]struct{}
 }
 
 // newRootContext builds the top-level compilation context for a single
@@ -77,10 +81,12 @@ type CompilationContext struct {
 // owning Compiler.
 func newRootContext(sr resolver.SchemaResolver, rm meta.RESTMapper) *CompilationContext {
 	return &CompilationContext{
-		schemaResolver: sr,
-		restMapper:     rm,
-		fieldCache:     schema.NewCache(),
-		localIDs:       map[string]struct{}{},
+		schemaResolver:      sr,
+		restMapper:          rm,
+		fieldCache:          schema.NewCache(),
+		localIDs:            map[string]struct{}{},
+		nodeSchemaOverrides: map[string]*spec.Schema{},
+		literalNodes:        map[string]struct{}{},
 	}
 }
 
@@ -96,6 +102,7 @@ func (ctx *CompilationContext) child() *CompilationContext {
 		fieldCache:          ctx.fieldCache,
 		localIDs:            map[string]struct{}{},
 		nodeSchemaOverrides: ctx.nodeSchemaOverrides,
+		literalNodes:        ctx.literalNodes,
 	}
 }
 
@@ -148,10 +155,15 @@ func (ctx *CompilationContext) buildNode(p *parser.Parser, n *expv1alpha1.Node, 
 	// schema from the literal payload so the typed CEL env can narrow
 	// def-sourced expressions. Fields whose literal value is a CEL
 	// fragment (e.g. `${other.x}`) stay dyn — see inferDefSchema.
+	// Literal def nodes (e.g. instance schema nodes) skip expression parsing.
 	if kind == NodeKindDef {
-		descriptors, _, err := parser.ParseSchemalessResource(payload)
-		if err != nil {
-			return nil, nil, fmt.Errorf("parse def payload: %w", err)
+		var descriptors []variable.FieldDescriptor
+		if _, isLiteral := ctx.literalNodes[n.ID]; !isLiteral {
+			var err error
+			descriptors, _, err = parser.ParseSchemalessResource(payload)
+			if err != nil {
+				return nil, nil, fmt.Errorf("parse def payload: %w", err)
+			}
 		}
 		forEach, err := parseForEachDimensions(n.ForEach)
 		if err != nil {
@@ -219,7 +231,19 @@ func (ctx *CompilationContext) buildNode(p *parser.Parser, n *expv1alpha1.Node, 
 
 	var descriptors []variable.FieldDescriptor
 	if kind == NodeKindTemplate {
-		descriptors, err = p.ParseResource(payload, sch)
+		if gvk.Group == "apiextensions.k8s.io" && gvk.Kind == "CustomResourceDefinition" {
+			descriptors, _, err = parser.ParseSchemalessResource(payload)
+			if err != nil {
+				return nil, nil, fmt.Errorf("parse %s payload: %w", kind, err)
+			}
+			for _, expr := range descriptors {
+				if !strings.HasPrefix(expr.Path, "metadata.") {
+					return nil, nil, fmt.Errorf("CEL expressions in CRDs are only supported for metadata fields, found in path %q, resource %s", expr.Path, n.ID)
+				}
+			}
+		} else {
+			descriptors, err = p.ParseResource(payload, sch)
+		}
 	} else {
 		// Ref payloads are synthesized from typed structs (ExternalRef).
 		// The OpenAPI schema for the target GVK does not match
@@ -408,8 +432,8 @@ func validateKubernetesObjectStructure(obj map[string]interface{}, requireMetada
 	if err != nil {
 		return fmt.Errorf("apiVersion %q: %w", apiVersion, err)
 	}
-	if !kubernetesVersionRegex.MatchString(gv.Version) {
-		return fmt.Errorf("apiVersion version %q is not a valid Kubernetes version (expected v1, v1alpha1, v1beta1, ...)", gv.Version)
+	if gv.Version == "" {
+		return fmt.Errorf("apiVersion %q: missing version", apiVersion)
 	}
 	if requireMetadata {
 		md, ok := obj["metadata"]

@@ -159,12 +159,12 @@ func TestCompilationContext_BuildNode(t *testing.T) {
 			wantErr: "missing required field",
 		},
 		{
-			name: "non-Kubernetes version string is rejected",
+			name: "template missing version segment is rejected",
 			node: &expv1alpha1.Node{ID: "x", Template: rawExtensionFromObject(map[string]any{
-				"apiVersion": "apps/foo", "kind": "Deployment",
+				"apiVersion": "apps/", "kind": "Deployment",
 				"metadata": map[string]any{"name": "x"},
 			})},
-			wantErr: "not a valid Kubernetes version",
+			wantErr: "missing version",
 		},
 		{
 			name: "dynamic template missing metadata is rejected",

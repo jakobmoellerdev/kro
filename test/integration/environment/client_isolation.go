@@ -275,7 +275,12 @@ func (g *groupIsolatingClient) rewriteGroupInValue(v interface{}) {
 	}
 }
 
-func (g *groupIsolatingClient) Get(ctx context.Context, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
+func (g *groupIsolatingClient) Get(
+	ctx context.Context,
+	key client.ObjectKey,
+	obj client.Object,
+	opts ...client.GetOption,
+) error {
 	if _, ok := obj.(*apiextensionsv1.CustomResourceDefinition); ok {
 		// CRD names embed a group. A name like "testresources.kro.run" may refer
 		// to a user-created CRD (real base group) or to a CRD generated from an
@@ -356,7 +361,12 @@ func (g *groupIsolatingClient) Update(ctx context.Context, obj client.Object, op
 	return err
 }
 
-func (g *groupIsolatingClient) Patch(ctx context.Context, obj client.Object, patch client.Patch, opts ...client.PatchOption) error {
+func (g *groupIsolatingClient) Patch(
+	ctx context.Context,
+	obj client.Object,
+	patch client.Patch,
+	opts ...client.PatchOption,
+) error {
 	if _, ok := obj.(*apiextensionsv1.CustomResourceDefinition); ok {
 		return g.crdWriteFallback(obj, func() error { return g.Client.Patch(ctx, obj, patch, opts...) })
 	}

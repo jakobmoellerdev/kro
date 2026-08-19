@@ -57,6 +57,9 @@ type ReconcileConfig struct {
 	// `conditions:` block, which replaces kro's built-in conditions on
 	// .status.conditions[].
 	HasAuthorConditions bool
+	// MaxCollectionSize is the maximum number of instances a single
+	// forEach collection expansion may generate.
+	MaxCollectionSize int
 }
 
 // Controller manages the reconciliation of a single instance of a ResourceGraphDefinition,

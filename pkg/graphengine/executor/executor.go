@@ -30,7 +30,7 @@ import (
 
 // FieldManager is the field-manager identity all SSA writes use. Keep it
 // stable across versions so re-applies don't fight prior writes.
-const FieldManager = "kro-graphengine"
+const FieldManager = "kro.run/applyset"
 
 // ErrUnsupported is returned when an executor refuses to handle a node kind
 // it does not implement.

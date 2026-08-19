@@ -32,7 +32,6 @@ import (
 	"github.com/google/cel-go/common/types"
 	"github.com/google/cel-go/common/types/ref"
 	"github.com/google/cel-go/common/types/traits"
-	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apiserver/pkg/cel/openapi"
 
 	"github.com/kubernetes-sigs/kro/api/v1alpha1"
@@ -41,6 +40,7 @@ import (
 	celunstructured "github.com/kubernetes-sigs/kro/pkg/cel/unstructured"
 	"github.com/kubernetes-sigs/kro/pkg/graph"
 	"github.com/kubernetes-sigs/kro/pkg/graphengine/runtime"
+	"github.com/kubernetes-sigs/kro/pkg/runtime/resolver"
 )
 
 // ProjectInstanceStatus evaluates the RGD's spec.schema.status CEL
@@ -377,8 +377,9 @@ func buildStatusEnvForNodes(rt *runtime.Runtime, includeRuntime bool) (*cel.Env,
 // indices) are supported — same limitation as setAtPath. A non-map
 // intermediate is treated as not-found.
 func getAtPath(m map[string]any, path string) (any, bool) {
-	v, found, err := unstructured.NestedFieldNoCopy(m, strings.Split(path, ".")...)
-	if err != nil || !found {
+	r := resolver.NewResolver(m, nil)
+	v, err := r.GetValueAtPath(path)
+	if err != nil {
 		return nil, false
 	}
 	return v, true
@@ -515,28 +516,10 @@ func unwrapExpr(s string) string {
 	return s
 }
 
-// setAtPath writes val at the dotted path in m, creating intermediate maps
-// as needed.  Only simple dot-separated paths (no array indices) are
-// supported; status fields with array paths are not a current RGD pattern.
+// setAtPath writes val at the path in m (supporting dot-separated paths
+// and array indices like endpoints[0]), creating intermediate maps and slices
+// as needed.
 func setAtPath(m map[string]any, path string, val any) error {
-	parts := strings.Split(path, ".")
-	cur := m
-	for i, part := range parts {
-		if i == len(parts)-1 {
-			cur[part] = val
-			return nil
-		}
-		if next, ok := cur[part]; ok {
-			nextMap, ok := next.(map[string]any)
-			if !ok {
-				return fmt.Errorf("path segment %q already exists with type %T", part, next)
-			}
-			cur = nextMap
-		} else {
-			nextMap := make(map[string]any)
-			cur[part] = nextMap
-			cur = nextMap
-		}
-	}
-	return nil
+	r := resolver.NewResolver(m, nil)
+	return r.UpsertValueAtPath(path, val)
 }
