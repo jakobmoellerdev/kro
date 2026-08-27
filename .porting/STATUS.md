@@ -214,3 +214,47 @@ and 3 real graph-backend gaps documented above.
   - The earlier expand() forEach-axis data-pending change is KEPT as an
     independent correctness/consistency improvement (regression-free) but was
     NOT the cause of this bug.
+
+## Findings — RESOLUTION (v3, #2 assessed)
+
+- #2 includeWhen-flip prune: NOT an engine bug. Investigation confirmed the
+  reactive chain works in the engine — a top-level standalone Graph prunes
+  includeWhen-flipped children (controller.go diffManagedResources + ex.Delete
+  on clean apply; unit-pinned tracking_test.go/wiring_coverage_test.go), and the
+  L2 child Graph re-enqueues on instance change via its SCALAR `schema` ref watch
+  (name-keyed via coordinator scalarIndex — no label/selector mismatch like #3).
+  The parity test had conservatively branched the delete to builtin-only. Now
+  UN-BRANCHED (both backends assert AwaitDeleted, 90s window for the extra
+  instance-event->L2-enqueue hop). Verifying empirically (agent 6db5b884): if the
+  graph backend prunes reliably it's resolved parity; if flaky on latency, revert
+  to builtin-only.
+
+## SUMMARY of findings disposition
+
+- #1 GateReadiness: WONTFIX (intended production behavior).
+- #3 collection drift: FIXED (stampKROMeta instance-id) + unit test + un-branched;
+  committed 8454e7e.
+- #2 includeWhen-flip prune: engine already supports it; test un-branched,
+  verification in flight.
+
+## Findings — RESOLUTION (v4, FINAL — #2 verified)
+
+- #2 includeWhen-flip prune: VERIFIED REAL GAP, kept as builtin-only boundary.
+  Empirical run (3/3 deterministic): the graph backend does NOT prune a child
+  whose includeWhen flips false on a live instance spec change — the L2 instance
+  Graph never re-evaluates the includeWhen (managedResources stays 2, zero
+  prune/ignore activity), retired child survives past 90s. The root-cause
+  agent's theory that the scalar-ref reactive chain drives an L2 re-eval was
+  WRONG in practice. This is a live-instance-spec-change -> nested-L2-re-eval gap
+  (distinct from #3's collection label/selector bug). Reverted the un-branch;
+  assertion is builtin-only. NOTE: this is a genuine RGD-as-Graph reactive gap
+  worth a future engine fix (nested L2 re-reconcile on instance spec change), but
+  out of scope for this porting effort.
+
+## FINAL DISPOSITION
+
+- #1 GateReadiness: WONTFIX (intended production behavior). Builtin-only boundary.
+- #3 collection drift restore: FIXED + verified + unit-tested; committed 8454e7e.
+  (Real bug: missing instance-id label on standalone collection children.)
+- #2 includeWhen-flip prune: VERIFIED real gap; kept builtin-only boundary +
+  documented as future engine work. Not fixed this pass (nested reactive re-eval).

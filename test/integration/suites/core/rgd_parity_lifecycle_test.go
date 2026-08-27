@@ -198,13 +198,17 @@ var _ = Describe("RGD parity: lifecycle", func() {
 					// The retired resource is pruned even though "gate" is still
 					// not ready.
 					//
-					// Parity boundary: the built-in controller prunes a child
-					// whose includeWhen flips false on an existing instance. The
-					// graph backend leaves includeWhen-flip pruning of an
-					// already-created child opt-in (it prunes on instance
-					// deletion — see the cascade table — but does not delete a
-					// child that a live instance stops including), so that leg of
-					// the assertion is built-in-only.
+					// PARITY BOUNDARY (verified real gap): the built-in controller
+					// prunes a child whose includeWhen flips false on a live
+					// instance. The standalone Graph backend does NOT: after the
+					// instance spec flip the L2 instance Graph never re-evaluates
+					// the includeWhen (its managedResources stays at 2, no
+					// prune/ignore activity), so the retired child survives well
+					// past a 90s window (verified 3/3 deterministic, not latency).
+					// Unlike collection drift (fixed via the instance-id label),
+					// this is a live-instance-spec-change -> nested-L2-re-eval gap;
+					// the destructive assertion is therefore built-in-only. Both
+					// backends DO prune on full instance deletion (cascade table).
 					if isBuiltin(be) {
 						env.AwaitDeleted(t, configMapGVK, retiredKey, 60*time.Second)
 					}
