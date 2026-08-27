@@ -982,6 +982,20 @@ func (s *Simple) stampKROMeta(rt *runtime.Runtime, n *runtime.Node, obj *unstruc
 	if n.IsCollection() {
 		labels[metadata.CollectionIndexLabel] = strconv.Itoa(index)
 		labels[metadata.CollectionSizeLabel] = strconv.Itoa(size)
+		// Collection drift detection registers a selector watch scoped by
+		// node-id AND instance-id (watchCollection). On the RGD/instance path a
+		// LabelInjector stamps the real instance-id; on the standalone Graph
+		// path there is none, so without this the selector (which falls back to
+		// the Graph UID) could never match the child's labels and out-of-band
+		// drift on a collection item would never re-enqueue the Graph. Stamp the
+		// same Graph-UID fallback here so label and selector agree by
+		// construction. Only set it when absent so a LabelInjector's real
+		// instance-id is never clobbered.
+		if labels[metadata.InstanceIDLabel] == "" {
+			if uid := string(rt.Graph().GetUID()); uid != "" {
+				labels[metadata.InstanceIDLabel] = uid
+			}
+		}
 	}
 	obj.SetLabels(labels)
 

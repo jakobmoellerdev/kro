@@ -438,6 +438,21 @@ func (n *Node) expand() ([]map[string]any, error) {
 	for _, axis := range n.spec.ForEach {
 		items, err := evalList(axis.Expression, n.rt.scope)
 		if err != nil {
+			// A forEach axis can reference an upstream node (e.g. a ref node
+			// like `schema` in the RGD-as-Graph L2) whose value has not been
+			// published into scope yet on this pass — most visibly on a
+			// reactive, child-triggered reconcile where the ref's Get soft-
+			// fails before this node expands. That surfaces as a CEL
+			// "no such attribute" error, which is a data-pending condition,
+			// not a hard failure. Classify it as soft ErrDataPending so the
+			// executor records the node Unresolved and requeues (re-expanding
+			// once the dependency resolves) instead of aborting the whole
+			// walk. This mirrors the data-pending tolerance already applied at
+			// every other CEL eval site (includeWhen, readyWhen, the template
+			// body); the forEach axis was the sole outlier.
+			if IsCELDataPending(err) {
+				return nil, fmt.Errorf("forEach %q: %w (%w)", axis.Name, err, ErrDataPending)
+			}
 			return nil, fmt.Errorf("forEach %q: %w", axis.Name, err)
 		}
 		dims = append(dims, evaluatedDimension{name: axis.Name, values: items})

@@ -906,14 +906,17 @@ var _ = Describe("RGD parity: forEach collections", func() {
 	// Ported from collection_test.go "should detect and restore drift in
 	// collection resources".
 	//
-	// PARITY BOUNDARY: the built-in backend restores managed-field drift on
-	// collection items. The standalone graph backend converges the collection on
-	// initial apply but, on a child-object-triggered reactive reconcile, the L2
-	// self-ref `schema` node is not re-resolved, so the collection's
-	// forEach (`${schema.spec.items}`) apply errors and drift is NOT restored
-	// ("no such attribute(s): schema"). The drift-restore assertion is therefore
-	// branched on isBuiltin(be); both backends still agree on the initial child
-	// set.
+	// PARITY BOUNDARY (RESOLVED): the built-in backend restores managed-field
+	// drift on collection items. The standalone graph backend previously did NOT:
+	// its collection drift-watch registers a selector scoped by node-id AND
+	// instance-id, but standalone collection children were stamped with only
+	// node-id (instance-id was applied solely by the RGD path's LabelInjector).
+	// The selector therefore never matched, so out-of-band drift on a collection
+	// item never re-enqueued the Graph. Fixed by stamping the Graph-UID fallback
+	// instance-id onto standalone collection children in stampKROMeta
+	// (pkg/graphengine/executor/simple.go), mirroring the fallback watchCollection
+	// already uses for the selector. Drift restore is now asserted for BOTH
+	// backends.
 	DescribeTable("drift on a collection item is restored",
 		func(makeBackend func() rgdBackend) {
 			runParityFixture(makeBackend(),
@@ -956,13 +959,9 @@ var _ = Describe("RGD parity: forEach collections", func() {
 							}, 60*time.Second)
 					}
 
-					// PARITY BOUNDARY: only the built-in backend restores
-					// collection-item managed-field drift (see table comment).
-					if !isBuiltin(be) {
-						return
-					}
-
-					// Tamper with a managed field on the alpha item, expect restore.
+					// Tamper with a managed field on the alpha item, expect restore
+					// on both backends (collection-item instance-id fix, see table
+					// comment).
 					alphaKey := types.NamespacedName{Namespace: ns, Name: "drift-alpha"}
 					parityDriftChildData(t, configMapGVK, alphaKey, "prefix", "DRIFTED")
 					awaitInstanceCR(t, configMapGVK, alphaKey,

@@ -142,3 +142,75 @@ collisions, no flakes). Package `go test -c` exit 0. `make lint` → 0 issues.
 Porting COMPLETE: 41 source RGD test files mapped; 77 DescribeTables (154 backend
 specs) + built-in-only It specs across 8 ported files + base. Parity boundaries
 and 3 real graph-backend gaps documented above.
+
+## Findings triage (addressing pass)
+
+- Finding #1 (GateReadiness off): CONFIRMED INTENDED, not a bug. Production
+  (cmd/controller/graphengine.go) and the integration env both create the Graph
+  executor WITHOUT GateReadiness (ConflictDetection=true only). Standalone Graphs
+  never gate readiness by design; RGD-as-Graph inherits this. Parity boundary is
+  correct — no code change. (Enabling it controller-wide would change all Graph
+  behavior; out of scope.)
+
+- Finding #2 (includeWhen-flip prune of already-created child): NEEDS CARE. The
+  top-level standalone Graph controller DOES prune includeWhen-flipped children
+  (controller.go diffManagedResources: "includeWhen flipped" is an explicit
+  prune candidate, pruned on clean apply). The RGD-as-Graph gap is likely in
+  REACTIVE PROPAGATION through the nested L0->L1->L2 stamping (the flipped child
+  lives in an L2 child Graph; L1 must re-stamp L2 on instance change for L2 to
+  prune). May share a root cause with #3.
+
+- Finding #3 (collection drift `no such attribute(s): schema`): root-cause
+  investigation dispatched (agent c967c6dc). Concrete runtime error in the
+  reactive reconcile path where a forEach axis referencing a ref node (`schema`)
+  loses that node's scope value on a child-triggered reconcile.
+
+## Findings — RESOLUTION
+
+- #1 GateReadiness: WONTFIX (intended). Standalone Graphs never gate readiness
+  in production (cmd/controller/graphengine.go) or the integration env. Parity
+  boundary is correct.
+
+- #3 forEach-axis data-pending (`no such attribute(s): schema`): FIXED in
+  pkg/graphengine/runtime/node.go expand() — forEach-axis CEL errors now
+  classified as soft ErrDataPending (matching includeWhen/readyWhen/template-body
+  eval sites), so a reactive reconcile requeues + re-expands instead of hard-
+  aborting. Root cause: expand()/evalList were the ONLY eval sites bypassing
+  IsCELDataPending. Drift-restore parity assertion un-branched (asserts both
+  backends now). Verification agent b5b39f67 running.
+
+- #2 includeWhen-flip prune of already-created child: likely SAME root cause as
+  #3 (reactive re-resolution). Re-evaluate after #3 fix lands — the L2 child
+  Graph re-reconcile that was hard-aborting on the missing `schema` ref may now
+  requeue and prune correctly. Pending #3 verification.
+
+## Findings — RESOLUTION (corrected after verification)
+
+- #3 CORRECTED: The `no such attribute(s): schema` hard-abort was NOT the live
+  cause. Verified: on collection-item drift the graph backend produces NO error
+  and simply goes IDLE — the child modification never drives a re-apply within
+  60s. Real cause is a watch/re-enqueue-or-reapply gap for COLLECTION children
+  in the standalone Graph engine (under investigation, agent 3a70c85c).
+  - The expand() forEach-axis data-pending classification change is KEPT: it is
+    a correct, regression-free consistency fix (forEach axis was the only eval
+    site not classifying CEL data-pending as soft), but it does NOT fix the
+    drift bug. Commit framing must not claim it does.
+  - Drift-restore parity assertion RE-BRANCHED to builtin-only pending a real
+    fix for the collection-child watch/reapply gap.
+
+## Findings — RESOLUTION (v2, real root cause)
+
+- #3 REAL ROOT CAUSE + FIX: standalone Graph collection drift-watch registers a
+  selector scoped by {node-id, instance-id}, but standalone collection children
+  were stamped with node-id ONLY (instance-id came solely from the RGD path's
+  LabelInjector). Selector never matched -> child drift never re-enqueued the
+  Graph -> no restore. Non-collection children were unaffected (name-keyed
+  scalar watch, no selector). Re-apply itself always worked (unconditional SSA).
+  FIX: stampKROMeta now stamps instance-id = Graph UID on standalone collection
+  children (only when absent), symmetric with watchCollection's existing UID
+  fallback. Executor unit tests (incl. collection-watch selector tests) pass.
+  Drift-restore parity assertion un-branched (both backends). Verifying
+  (agent fecf490b).
+  - The earlier expand() forEach-axis data-pending change is KEPT as an
+    independent correctness/consistency improvement (regression-free) but was
+    NOT the cause of this bug.
