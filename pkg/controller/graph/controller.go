@@ -354,11 +354,23 @@ func (r *Reconciler) reconcileGraph(ctx context.Context, g *expv1alpha1.Graph) e
 	// shrunk, includeWhen flipped, or rename.
 	newSet, pruneCandidates := diffManagedResources(previous, result)
 
-	if applyErr == nil {
-		// Only prune on a fully clean Apply. If we have any soft errors
-		// (Unresolved is non-empty) or hard errors, keep the union of
-		// previous and applied to protect resources we couldn't observe
-		// this cycle.
+	// A soft ErrNotReady still walked every reachable node (that is why the
+	// watch set was committed above via Done(true)), so the Applied/Unresolved
+	// partition — and therefore pruneCandidates — is authoritative: a candidate
+	// here is a resource the executor is confident is no longer wanted (node
+	// dropped, forEach shrunk, includeWhen flipped, rename), never one merely
+	// data-pending (those are recorded Unresolved and preserved by
+	// diffManagedResources). Pruning must therefore run on a clean apply OR a
+	// soft not-ready — otherwise a Graph that never converges (e.g. a sibling
+	// resource with an unsatisfiable readyWhen) could never prune a
+	// legitimately-retired resource, diverging from the built-in controller.
+	// A HARD error may have aborted the walk before downstream nodes were
+	// reached (watcher.Done(false)); those nodes are neither Applied nor
+	// Unresolved and would be misclassified as prune candidates, so pruning is
+	// still withheld and the union is kept for a future reconcile.
+	walkComplete := applyErr == nil || errors.Is(applyErr, executor.ErrNotReady)
+
+	if walkComplete {
 		if len(pruneCandidates) > 0 {
 			if err := ex.Delete(ctx, pruneCandidates); err != nil {
 				// Prune failure isn't catastrophic — next reconcile
@@ -366,13 +378,23 @@ func (r *Reconciler) reconcileGraph(ctx context.Context, g *expv1alpha1.Graph) e
 				// status to newSet if some prune candidates are still
 				// in the cluster, so keep the union.
 				log.FromContext(ctx).Error(err, "prune failed; keeping union in status")
-				g.Status.ManagedResources = unionManagedResources(previous, result.Applied)
+				g.Status.ManagedResources = unionManagedResources(
+					unionManagedResources(previous, result.Applied), intent)
 				return fmt.Errorf("prune: %w", err)
 			}
 		}
-		g.Status.ManagedResources = newSet
+		if applyErr == nil {
+			g.Status.ManagedResources = newSet
+		} else {
+			// Soft not-ready: the retired candidates were pruned above, so
+			// they must not reappear in status. newSet already excludes them
+			// and retains the Unresolved (data-pending) entries; fold intent
+			// back in so a lost status write can't shrink the server inventory
+			// below the pre-apply superset (UID-free intent dedups via keyOf).
+			g.Status.ManagedResources = unionManagedResources(newSet, intent)
+		}
 	} else {
-		// Soft or hard failure — keep the union so a future reconcile can still
+		// Hard failure — keep the union so a future reconcile can still
 		// prune or restore. Fold intent back in so the terminal updateStatus
 		// cannot shrink the server inventory below the pre-apply superset and
 		// re-open the orphan window; UID-free intent dedups against Applied via

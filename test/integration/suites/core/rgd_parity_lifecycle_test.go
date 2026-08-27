@@ -196,22 +196,22 @@ var _ = Describe("RGD parity: lifecycle", func() {
 					})
 
 					// The retired resource is pruned even though "gate" is still
-					// not ready.
+					// not ready — on BOTH backends.
 					//
-					// PARITY BOUNDARY (verified real gap): the built-in controller
-					// prunes a child whose includeWhen flips false on a live
-					// instance. The standalone Graph backend does NOT: after the
-					// instance spec flip the L2 instance Graph never re-evaluates
-					// the includeWhen (its managedResources stays at 2, no
-					// prune/ignore activity), so the retired child survives well
-					// past a 90s window (verified 3/3 deterministic, not latency).
-					// Unlike collection drift (fixed via the instance-id label),
-					// this is a live-instance-spec-change -> nested-L2-re-eval gap;
-					// the destructive assertion is therefore built-in-only. Both
-					// backends DO prune on full instance deletion (cascade table).
-					if isBuiltin(be) {
-						env.AwaitDeleted(t, configMapGVK, retiredKey, 60*time.Second)
-					}
+					// This used to be a verified parity gap: the graph backend's L2
+					// instance Graph did re-evaluate the includeWhen after the spec
+					// flip and correctly dropped "retired" from its desired/watch
+					// set, but the pruning of that confidently-retired child was
+					// gated on a fully clean apply. Because "gate" is unsatisfiable,
+					// the L2 apply is perpetually soft-not-ready, so the prune never
+					// ran and the retired child survived. Fixed in the Graph
+					// reconciler (pkg/controller/graph/controller.go): pruning of
+					// confident prune candidates now runs on a clean apply OR a soft
+					// ErrNotReady (the executor walks every reachable node in both
+					// cases, so the Applied/Unresolved partition is authoritative);
+					// only a HARD error, which can abort the walk early, still
+					// withholds the prune. Both backends now prune reliably.
+					env.AwaitDeleted(t, configMapGVK, retiredKey, 90*time.Second)
 
 					// The still-included resource is untouched on both backends.
 					environment.Consistently(t, 3*time.Second, 500*time.Millisecond, func() error {
