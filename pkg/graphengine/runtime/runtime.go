@@ -70,6 +70,16 @@ type Runtime struct {
 	// on the shared Program — so concurrent reconciles cannot leak data into
 	// one another.
 	nodeObjectOverrides map[string]*unstructured.Unstructured
+
+	// readyState records, per node ID, whether the node reached a terminal
+	// ready state during THIS reconcile pass. The executor updates it as it
+	// walks nodes in topological order (SetReady); expression evaluation reads
+	// it through the reserved __kro_ready__ scope variable so the `.ready()`
+	// CEL macro (library.Lifecycle) resolves node readiness. A node ID absent
+	// from the map is "unknown this pass" — .ready() yields optional.none().
+	// nil until the first SetReady, so a Runtime with no readiness signal
+	// injects nothing.
+	readyState map[string]bool
 }
 
 // Option configures a Runtime at construction time.
@@ -244,6 +254,34 @@ func (r *Runtime) Set(id string, value any) {
 		isTemplateOrRef = node.Kind() == compiler.NodeKindTemplate || node.Kind() == compiler.NodeKindRef
 	}
 	r.scope[id] = wrapValueForScope(value, sc, isTemplateOrRef)
+}
+
+// SetReady records whether node id reached a terminal ready state this
+// reconcile pass. The executor calls it as it walks nodes in topological
+// order; expression evaluation reads it back through the reserved
+// __kro_ready__ scope variable so the `.ready()` CEL macro resolves. Nodes
+// never marked stay absent from the map, so `.ready()` yields optional.none()
+// for them ("unknown this pass").
+func (r *Runtime) SetReady(id string, ready bool) {
+	if r.readyState == nil {
+		r.readyState = make(map[string]bool)
+	}
+	r.readyState[id] = ready
+}
+
+// readyScopeValue returns the readiness map to inject under __kro_ready__ for
+// expression evaluation, or nil when no readiness has been recorded (so the
+// variable is simply absent and any `.ready()` resolves to optional.none()).
+// A copy is returned so a node holding the scope cannot mutate executor state.
+func (r *Runtime) readyScopeValue() map[string]any {
+	if len(r.readyState) == 0 {
+		return nil
+	}
+	out := make(map[string]any, len(r.readyState))
+	for k, v := range r.readyState {
+		out[k] = v
+	}
+	return out
 }
 
 func wrapValueForScope(val any, sc *spec.Schema, isTemplateOrRef bool) any {

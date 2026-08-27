@@ -25,6 +25,7 @@ import (
 	"k8s.io/kube-openapi/pkg/validation/spec"
 
 	krocel "github.com/kubernetes-sigs/kro/pkg/cel"
+	"github.com/kubernetes-sigs/kro/pkg/cel/library"
 	"github.com/kubernetes-sigs/kro/pkg/cel/sentinels"
 	"github.com/kubernetes-sigs/kro/pkg/graph/fieldpath"
 	"github.com/kubernetes-sigs/kro/pkg/graph/resolver"
@@ -269,6 +270,9 @@ func (n *Node) checkCollectionReadiness() error {
 
 	scope := make(map[string]any, len(n.rt.scope)+1)
 	maps.Copy(scope, n.rt.scope)
+	if readyScope := n.rt.readyScopeValue(); readyScope != nil {
+		scope[library.ReadyVarName] = readyScope
+	}
 
 	for i, obj := range n.observed {
 		scope[compiler.EachVarName] = wrapValueForScope(obj.Object, itemSc, true)
@@ -342,10 +346,18 @@ func (n *Node) Resolve() ([]*unstructured.Unstructured, error) {
 // instances.
 func (n *Node) renderOne(bindings map[string]any) (*unstructured.Unstructured, error) {
 	scope := n.rt.scope
-	if len(bindings) > 0 {
-		scope = make(map[string]any, len(n.rt.scope)+len(bindings))
+	readyScope := n.rt.readyScopeValue()
+	if len(bindings) > 0 || readyScope != nil {
+		scope = make(map[string]any, len(n.rt.scope)+len(bindings)+1)
 		maps.Copy(scope, n.rt.scope)
 		maps.Copy(scope, bindings)
+		// Inject the per-pass readiness map so the `.ready()` macro
+		// (rewritten to __kro_ready__[?'id']) resolves. Layered here rather
+		// than kept in rt.scope so it always reflects the latest executor
+		// state and never leaks into published node values.
+		if readyScope != nil {
+			scope[library.ReadyVarName] = readyScope
+		}
 	}
 
 	src := n.spec.Object

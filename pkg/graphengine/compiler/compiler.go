@@ -320,20 +320,35 @@ func (ctx *CompilationContext) compileFrame(apiNodes []expv1alpha1.Node, isRoot 
 	// GVK templates and subgraph nodes (local, no published schema), plus all
 	// captured ancestor IDs (the cross-frame seam). Within-frame typed
 	// references stay fully checked; the rest type-check permissively.
+	//
+	// One refinement: a dynamic-GVK *collection* ref (a selector externalRef
+	// whose apiVersion/kind is a CEL expression) has no schema but is known to
+	// publish a LIST into scope. Declaring it as bare `dyn`/`any` would make a
+	// downstream `forEach` over it fail its list-shape type-check (forEach
+	// rejects `any`). Declare those as list<dyn> instead, so list operations
+	// and forEach type-check while the element type stays dynamic until the
+	// executor pins the GVK.
 	dynIDs := make([]string, 0, len(ancestors)+len(nodes))
 	dynIDs = append(dynIDs, ancestors...)
+	var listDynIDs []string
 	for id, n := range nodes {
 		if n.Kind == NodeKindPatch {
 			continue
 		}
-		if _, ok := celSchemas[id]; !ok {
-			dynIDs = append(dynIDs, id)
+		if _, ok := celSchemas[id]; ok {
+			continue
 		}
+		if n.DynamicGVK && n.IsCollection() {
+			listDynIDs = append(listDynIDs, id)
+			continue
+		}
+		dynIDs = append(dynIDs, id)
 	}
 	typedEnv, typeProvider, err := krocel.TypedEnvironmentWithIDsAndProvider(
 		celSchemas,
 		dynIDs,
 		krocel.WithRuntimeLibrary(false),
+		krocel.WithListVariables(listDynIDs),
 	)
 	if err != nil {
 		return nil, nil, fmt.Errorf("build typed CEL environment: %w", err)
@@ -725,6 +740,13 @@ func (ctx *CompilationContext) extractDependencies(
 	frames := make(map[int]struct{})
 	classify := func(id string) error {
 		if id == EachVarName {
+			return nil
+		}
+		// __kro_ready__ is the engine-injected readiness map behind the
+		// `.ready()` macro (rewritten to __kro_ready__[?'id']). It is a
+		// frame-neutral runtime variable, not a node reference: it creates no
+		// DAG edge and is never a capture. Exempt it exactly like `each`.
+		if id == ReadyVarName {
 			return nil
 		}
 		if targetNode, ok := nodes[id]; ok && targetNode.Kind == NodeKindPatch {

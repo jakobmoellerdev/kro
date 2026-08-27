@@ -145,6 +145,14 @@ func coreDeclarations() []cel.EnvOption {
 		library.JSON(),
 		library.Hash(),
 		library.Lists(),
+		// Schema() provides plural() and simpleSchema.toOpenAPI() so that an
+		// RGD-style controller can be expressed as a Graph (CRD synthesis in
+		// CEL). See examples/graph/rgd.yaml.
+		library.Schema(),
+		// Lifecycle() provides the `.ready()` signal (node readiness as
+		// optional<bool>) for RGD-style status writeback expressed as a Graph.
+		// See examples/graph/rgd.yaml, KREP-006.
+		library.Lifecycle(),
 		// Omit() is registered globally so CEL can parse and type-check it
 		// everywhere. The graph builder rejects it in restricted contexts
 		// (includeWhen, readyWhen, forEach) via inspectExpressionRestricted

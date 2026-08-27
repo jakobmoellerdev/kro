@@ -28,6 +28,14 @@ import (
 // collection iteration.
 const EachVarName = "each"
 
+// ReadyVarName is the reserved CEL variable holding per-node readiness,
+// injected at evaluation time and referenced by the `.ready()` macro's
+// rewrite (__kro_ready__[?'id']). It mirrors library.ReadyVarName; duplicated
+// here as a plain const so the compiler's dependency classifier can exempt it
+// without importing pkg/cel/library. The underscore-delimited name can never
+// collide with a node ID (constrained to ^[A-Za-z][A-Za-z0-9]*$).
+const ReadyVarName = "__kro_ready__"
+
 // NodeKind discriminates the Graph node types.
 type NodeKind int
 

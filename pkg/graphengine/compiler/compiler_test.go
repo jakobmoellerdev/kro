@@ -1106,6 +1106,42 @@ func TestCompile_DynamicRef(t *testing.T) {
 	})
 }
 
+// A forEach over a dynamic-GVK selector ref (an unknown Kind resolved at apply
+// time) must compile: the ref publishes no schema, so it is declared list<dyn>
+// rather than a bare `any`, and forEach accepts list<dyn>. This is the L1→L2
+// fan-out shape from examples/graph/rgd.yaml, where L1 watches instances of a
+// Kind whose CRD it just created and stamps one child Graph per instance.
+func TestCompile_ForEachOverDynamicCollectionRef(t *testing.T) {
+	t.Parallel()
+	g := generator.NewGraph("g",
+		generator.WithNamespace("default"),
+		generator.WithDef("crd", map[string]any{"group": "example.com", "version": "v1", "kind": "Widget"}),
+		generator.WithRef("instances", &expv1alpha1.ExternalRef{
+			APIVersion: "${crd.group}/${crd.version}",
+			Kind:       "${crd.kind}",
+			Metadata:   expv1alpha1.ExternalRefMetadata{Selector: &metav1.LabelSelector{}},
+		}),
+		generator.WithTemplate("child", map[string]any{
+			"apiVersion": "v1", "kind": "ConfigMap",
+			"metadata": map[string]any{"name": "${inst.metadata.name}-cm"},
+			"data":     map[string]any{"owner": "${inst.metadata.name}"},
+		}, generator.ForEachDim("inst", "${instances}")),
+	)
+	prog, err := newTestCompiler(t).Compile(g)
+	require.NoError(t, err, "forEach over a dynamic-GVK collection ref must compile")
+	require.NotNil(t, prog)
+
+	instances := prog.Nodes["instances"]
+	require.NotNil(t, instances)
+	assert.True(t, instances.DynamicGVK)
+	assert.True(t, instances.Collection)
+
+	child := prog.Nodes["child"]
+	require.NotNil(t, child)
+	assert.Len(t, child.ForEach, 1, "child expands per instance")
+	assert.Contains(t, child.HardDepIDs(), "instances", "forEach source is a hard dependency")
+}
+
 func TestCompile_WithSoftDependencies(t *testing.T) {
 	t.Parallel()
 	g := generator.NewGraph("g",

@@ -201,8 +201,17 @@ func (s *Simple) Apply(ctx context.Context, rt *runtime.Runtime, w watchrouter.W
 	}
 
 	// ready tracks which nodes reached a terminal ready state this cycle, so
-	// dependents can be gated until their dependencies converge.
+	// dependents can be gated until their dependencies converge. markReady
+	// mirrors each decision onto the Runtime so the `.ready()` CEL macro
+	// (__kro_ready__[?'id']) sees the same per-pass readiness during resolve
+	// of downstream nodes (e.g. an RGD-style status-writeback patch). A node
+	// left unmarked stays absent from the map — `.ready()` yields
+	// optional.none() ("unknown this pass").
 	ready := make(map[string]bool, len(rt.Nodes()))
+	markReady := func(id string, isReady bool) {
+		ready[id] = isReady
+		rt.SetReady(id, isReady)
+	}
 
 	for _, n := range rt.Nodes() {
 		ignored, err := n.IsIgnored()
@@ -223,7 +232,7 @@ func (s *Simple) Apply(ctx context.Context, rt *runtime.Runtime, w watchrouter.W
 			// will treat any previous entries for this NodeID as
 			// prune candidates. Ignored nodes are non-blocking for
 			// dependents (their dependents are contagiously ignored too).
-			ready[n.ID()] = true
+			markReady(n.ID(), true)
 			continue
 		}
 
@@ -253,7 +262,7 @@ func (s *Simple) Apply(ctx context.Context, rt *runtime.Runtime, w watchrouter.W
 				}
 				return result, fmt.Errorf("apply %q (subgraph): %w", n.ID(), err)
 			}
-			ready[n.ID()] = true
+			markReady(n.ID(), true)
 			continue
 		}
 
@@ -278,16 +287,20 @@ func (s *Simple) Apply(ctx context.Context, rt *runtime.Runtime, w watchrouter.W
 
 		// readyWhen is checked after observed state is recorded.
 		// Soft → ErrNotReady (already tracked in Applied); continue
-		// so downstream watches still register. Hard → abort.
+		// so downstream watches still register. Hard → abort. A soft
+		// not-ready is recorded as ready=false (not absent) so a
+		// downstream `.ready()` sees optional.of(false), letting status
+		// writeback report IN_PROGRESS rather than staying unknown.
 		if err := n.CheckReadiness(); err != nil {
 			if isSoftRuntimeErr(err) {
+				markReady(n.ID(), false)
 				recordSoft(fmt.Errorf("apply %q: %w (%w)", n.ID(), err, ErrNotReady))
 				continue
 			}
 			return result, fmt.Errorf("apply %q: %w", n.ID(), err)
 		}
 		// Node reached a terminal ready state — unblock its dependents.
-		ready[n.ID()] = true
+		markReady(n.ID(), true)
 	}
 	return result, firstSoft
 }
