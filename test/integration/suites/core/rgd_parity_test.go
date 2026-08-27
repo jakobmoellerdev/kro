@@ -20,8 +20,8 @@ import (
 	"time"
 
 	. "github.com/onsi/ginkgo/v2"
+	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
@@ -29,78 +29,30 @@ import (
 
 	krov1alpha1 "github.com/kubernetes-sigs/kro/api/v1alpha1"
 	"github.com/kubernetes-sigs/kro/pkg/testutil/generator"
+	"github.com/kubernetes-sigs/kro/test/integration/environment"
 )
 
 // This suite validates that an RGD fixture produces the same observable
 // behavior whether it is realized by the built-in ResourceGraphDefinition
 // controller or by the RGD-as-Graph controller (examples/graph/rgd.yaml, served
 // at v1alpha2 under a distinct group). Each fixture is run against BOTH backends
-// via the rgdBackend abstraction (see rgd_backend_test.go); the assertions cover
-// only the shared contract — the user CR's child resources converge with the
-// correct resolved field values, and the instance's status.ready flips true —
-// never backend-internal status shapes.
+// via the rgdBackend abstraction (see rgd_backend_test.go) and the package-level
+// runParityFixture harness (see rgd_parity_harness_test.go); the assertions
+// cover the shared contract — the user CR's child resources converge with the
+// correct resolved field values, and the instance reaches ready — with
+// backend-specific behavior branched on the backend and documented as a parity
+// boundary.
 //
-// This is the concrete answer to "test the RGD tests against the generated one
-// from rgd v1alpha2": the same fixtures, the same instances, the same
-// assertions, exercised on both the imperative-Go controller and the pure-Graph
-// one built from the primitives unblocked earlier (plural(),
-// simpleSchema.toOpenAPI(), forEach over a dynamic collection ref, .ready()).
+// This is the "core" set of ported scenarios; feature-specific ported scenarios
+// live in the sibling rgd_parity_*_test.go files.
 var _ = Describe("RGD parity: builtin vs RGD-as-Graph", func() {
-	// backends returns a fresh backend pair per fixture. The graph backend
-	// carries per-run state (its isolating group), so it is constructed anew
-	// each time rather than shared.
-	backends := func() []rgdBackend {
-		return []rgdBackend{
-			builtinRGDBackend{},
-			newGraphRGDBackend(),
-		}
-	}
-
-	// runFixture drives one RGD fixture through one backend end to end: deploy
-	// the definition, create an instance, and assert the child resource and the
-	// instance status converge.
-	runFixture := func(
-		be rgdBackend,
-		makeRGD func(name string) *krov1alpha1.ResourceGraphDefinition,
-		instanceSpec map[string]any,
-		assertChildren func(t GinkgoTInterface, ns, instanceName string),
-	) {
-		t := GinkgoT()
-		ns := createParityNamespace(t)
-
-		// Unique RGD/Kind names per (backend, run) so the two backends' CRDs
-		// never collide on the shared cluster-scoped API surface.
-		rgd := makeRGD("parity" + rand.String(5))
-		gvk := be.Deploy(t, rgd)
-
-		instName := "inst-" + rand.String(5)
-		inst := newInstanceCR(gvk, ns, instName, instanceSpec)
-		ctx := env.Context()
-		if ctx == nil {
-			ctx = context.Background()
-		}
-		if err := env.Client.Create(ctx, inst); err != nil {
-			t.Fatalf("%s: create instance: %v", be.Name(), err)
-		}
-		t.Cleanup(func() { _ = env.Client.Delete(context.Background(), inst) })
-
-		assertChildren(t, ns, instName)
-
-		// Shared status contract: the instance eventually reports ready.
-		// Built-in RGD writes status.state=ACTIVE + Ready condition; the graph
-		// backend writes status.ready=true via .ready(). Assert the lowest
-		// common denominator each backend guarantees.
-		awaitInstanceReady(t, be, gvk, types.NamespacedName{Namespace: ns, Name: instName})
-	}
-
 	// ── Fixture: a single ConfigMap resolved from the instance spec ─────────
 	//
 	// The classic smoke shape: one resource whose data is templated from
 	// ${schema.spec.*}. Proves schema→resource value resolution is identical.
 	DescribeTable("a ConfigMap resolved from the instance spec",
 		func(makeBackend func() rgdBackend) {
-			be := makeBackend()
-			runFixture(be,
+			runParityFixture(makeBackend(),
 				func(name string) *krov1alpha1.ResourceGraphDefinition {
 					return generator.NewResourceGraphDefinition(name,
 						generator.WithSchema(
@@ -119,7 +71,7 @@ var _ = Describe("RGD parity: builtin vs RGD-as-Graph", func() {
 					)
 				},
 				map[string]any{"name": "resolved-cm", "greeting": "hello"},
-				func(t GinkgoTInterface, ns, _ string) {
+				func(t GinkgoTInterface, ns, _ string, _ schema.GroupVersionKind, _ rgdBackend) {
 					awaitInstanceCR(t, configMapGVK,
 						types.NamespacedName{Namespace: ns, Name: "resolved-cm"},
 						func(u *unstructured.Unstructured) error {
@@ -134,8 +86,8 @@ var _ = Describe("RGD parity: builtin vs RGD-as-Graph", func() {
 				},
 			)
 		},
-		Entry("builtin", func() rgdBackend { return builtinRGDBackend{} }),
-		Entry("graph-v1alpha2", func() rgdBackend { return newGraphRGDBackend() }),
+		Entry("builtin", parityBuiltin),
+		Entry("graph-v1alpha2", parityGraph),
 	)
 
 	// ── Fixture: two resources with a cross-resource reference ──────────────
@@ -143,8 +95,7 @@ var _ = Describe("RGD parity: builtin vs RGD-as-Graph", func() {
 	// cm2 reads cm1's name, exercising dependency ordering + cross-node CEL.
 	DescribeTable("two ConfigMaps with a cross-resource reference",
 		func(makeBackend func() rgdBackend) {
-			be := makeBackend()
-			runFixture(be,
+			runParityFixture(makeBackend(),
 				func(name string) *krov1alpha1.ResourceGraphDefinition {
 					return generator.NewResourceGraphDefinition(name,
 						generator.WithSchema(
@@ -171,7 +122,7 @@ var _ = Describe("RGD parity: builtin vs RGD-as-Graph", func() {
 					)
 				},
 				map[string]any{"name": "chain"},
-				func(t GinkgoTInterface, ns, _ string) {
+				func(t GinkgoTInterface, ns, _ string, _ schema.GroupVersionKind, _ rgdBackend) {
 					awaitInstanceCR(t, configMapGVK,
 						types.NamespacedName{Namespace: ns, Name: "chain-2"},
 						func(u *unstructured.Unstructured) error {
@@ -186,22 +137,19 @@ var _ = Describe("RGD parity: builtin vs RGD-as-Graph", func() {
 				},
 			)
 		},
-		Entry("builtin", func() rgdBackend { return builtinRGDBackend{} }),
-		Entry("graph-v1alpha2", func() rgdBackend { return newGraphRGDBackend() }),
+		Entry("builtin", parityBuiltin),
+		Entry("graph-v1alpha2", parityGraph),
 	)
 
-	// ── Fixture: readyWhen gating drives dependency ordering + status ──────
+	// ── Fixture: readyWhen gating (data-driven) drives dependency ordering ──
 	//
 	// gate is a ConfigMap whose readyWhen reads its own data.ready (populated
 	// from the instance spec, so it converges in envtest without a kubelet).
-	// dependent references gate.data.value, so it is gated until gate is ready.
-	// This exercises the whole readiness pipeline through the graph backend:
-	// readyWhen → .ready() → dependency gating → status.ready writeback — the
-	// features unblocked earlier. Both backends must converge identically.
+	// dependent references gate, so it is gated until gate is ready. Exercises
+	// readyWhen → .ready() → status writeback through the graph backend.
 	DescribeTable("readyWhen gates a dependent resource",
 		func(makeBackend func() rgdBackend) {
-			be := makeBackend()
-			runFixture(be,
+			runParityFixture(makeBackend(),
 				func(name string) *krov1alpha1.ResourceGraphDefinition {
 					return generator.NewResourceGraphDefinition(name,
 						generator.WithSchema(
@@ -209,7 +157,6 @@ var _ = Describe("RGD parity: builtin vs RGD-as-Graph", func() {
 							map[string]any{"name": "string", "gateReady": "boolean"},
 							map[string]any{"ready": "${dependent.metadata.name != ''}"},
 						),
-						// gate: ready only when data.ready == "true" (from spec).
 						generator.WithResource("gate", map[string]any{
 							"apiVersion": "v1", "kind": "ConfigMap",
 							"metadata": map[string]any{
@@ -218,7 +165,6 @@ var _ = Describe("RGD parity: builtin vs RGD-as-Graph", func() {
 							},
 							"data": map[string]any{"ready": `${string(schema.spec.gateReady)}`},
 						}, []string{`${gate.data.?ready.orValue("false") == "true"}`}, nil),
-						// dependent: references gate, so it applies only after gate is ready.
 						generator.WithResource("dependent", map[string]any{
 							"apiVersion": "v1", "kind": "ConfigMap",
 							"metadata": map[string]any{
@@ -230,8 +176,7 @@ var _ = Describe("RGD parity: builtin vs RGD-as-Graph", func() {
 					)
 				},
 				map[string]any{"name": "gated", "gateReady": true},
-				func(t GinkgoTInterface, ns, _ string) {
-					// The dependent only exists once gate satisfied its readyWhen.
+				func(t GinkgoTInterface, ns, _ string, _ schema.GroupVersionKind, _ rgdBackend) {
 					awaitInstanceCR(t, configMapGVK,
 						types.NamespacedName{Namespace: ns, Name: "gated-dependent"},
 						func(u *unstructured.Unstructured) error {
@@ -246,18 +191,14 @@ var _ = Describe("RGD parity: builtin vs RGD-as-Graph", func() {
 				},
 			)
 		},
-		Entry("builtin", func() rgdBackend { return builtinRGDBackend{} }),
-		Entry("graph-v1alpha2", func() rgdBackend { return newGraphRGDBackend() }),
+		Entry("builtin", parityBuiltin),
+		Entry("graph-v1alpha2", parityGraph),
 	)
 
 	// ── Fixture: includeWhen conditionally includes a resource ────────────
-	//
-	// optional is included only when schema.spec.enabled is true. With enabled
-	// true, both backends must create it; the always resource is unconditional.
 	DescribeTable("includeWhen conditionally includes a resource",
 		func(makeBackend func() rgdBackend) {
-			be := makeBackend()
-			runFixture(be,
+			runParityFixture(makeBackend(),
 				func(name string) *krov1alpha1.ResourceGraphDefinition {
 					return generator.NewResourceGraphDefinition(name,
 						generator.WithSchema(
@@ -284,31 +225,24 @@ var _ = Describe("RGD parity: builtin vs RGD-as-Graph", func() {
 					)
 				},
 				map[string]any{"name": "cond", "enabled": true},
-				func(t GinkgoTInterface, ns, _ string) {
+				func(t GinkgoTInterface, ns, _ string, _ schema.GroupVersionKind, _ rgdBackend) {
 					awaitInstanceCR(t, configMapGVK,
 						types.NamespacedName{Namespace: ns, Name: "cond-always"},
 						nil, 60*time.Second)
-					// enabled=true → optional is included by both backends.
 					awaitInstanceCR(t, configMapGVK,
 						types.NamespacedName{Namespace: ns, Name: "cond-optional"},
 						nil, 60*time.Second)
 				},
 			)
 		},
-		Entry("builtin", func() rgdBackend { return builtinRGDBackend{} }),
-		Entry("graph-v1alpha2", func() rgdBackend { return newGraphRGDBackend() }),
+		Entry("builtin", parityBuiltin),
+		Entry("graph-v1alpha2", parityGraph),
 	)
 
 	// ── Fixture: forEach expands a collection resource per list element ────
-	//
-	// cm is a collection: one ConfigMap per entry in schema.spec.regions, named
-	// after each region. This exercises the graph backend's forEach carry-
-	// through (rgdResourceToL2Node) and the engine's collection expansion,
-	// which must match the built-in controller's per-element stamping.
 	DescribeTable("forEach expands a collection resource",
 		func(makeBackend func() rgdBackend) {
-			be := makeBackend()
-			runFixture(be,
+			runParityFixture(makeBackend(),
 				func(name string) *krov1alpha1.ResourceGraphDefinition {
 					return generator.NewResourceGraphDefinition(name,
 						generator.WithSchema(
@@ -329,8 +263,7 @@ var _ = Describe("RGD parity: builtin vs RGD-as-Graph", func() {
 					)
 				},
 				map[string]any{"name": "fleet", "regions": []any{"us", "eu"}},
-				func(t GinkgoTInterface, ns, _ string) {
-					// One ConfigMap per region, each carrying its region value.
+				func(t GinkgoTInterface, ns, _ string, _ schema.GroupVersionKind, _ rgdBackend) {
 					for _, region := range []string{"us", "eu"} {
 						want := region
 						awaitInstanceCR(t, configMapGVK,
@@ -348,47 +281,99 @@ var _ = Describe("RGD parity: builtin vs RGD-as-Graph", func() {
 				},
 			)
 		},
-		Entry("builtin", func() rgdBackend { return builtinRGDBackend{} }),
-		Entry("graph-v1alpha2", func() rgdBackend { return newGraphRGDBackend() }),
+		Entry("builtin", parityBuiltin),
+		Entry("graph-v1alpha2", parityGraph),
 	)
 
-	_ = backends
+	// ── Fixture: observed-status readyWhen gates a dependent (readiness_test) ─
+	//
+	// Mirrors readiness_test.go: a Deployment whose readyWhen checks
+	// spec.replicas == status.availableReplicas, and a Service that must wait.
+	// envtest has no kubelet, so the test patches the Deployment status
+	// mid-fixture. The strict "Service absent before Deployment ready" ordering
+	// is asserted only for the built-in backend — standalone Graphs leave
+	// dependency-readiness gating opt-in (GateReadiness), a documented parity
+	// boundary; both converge to the same end state.
+	DescribeTable("readyWhen on observed status gates a dependent (readiness parity)",
+		func(makeBackend func() rgdBackend) {
+			runParityFixture(makeBackend(),
+				func(name string) *krov1alpha1.ResourceGraphDefinition {
+					return generator.NewResourceGraphDefinition(name,
+						generator.WithSchema(
+							"ParityRollout"+rand.String(4), "v1alpha1",
+							map[string]any{"name": "string", "replicas": "integer"},
+							map[string]any{"ready": "${service.metadata.name != ''}"},
+						),
+						generator.WithResource("deployment", map[string]any{
+							"apiVersion": "apps/v1", "kind": "Deployment",
+							"metadata": map[string]any{
+								"name":      "${schema.spec.name}",
+								"namespace": "${schema.metadata.namespace}",
+							},
+							"spec": map[string]any{
+								"replicas": "${schema.spec.replicas}",
+								"selector": map[string]any{"matchLabels": map[string]any{"app": "rollout"}},
+								"template": map[string]any{
+									"metadata": map[string]any{"labels": map[string]any{"app": "rollout"}},
+									"spec": map[string]any{"containers": []any{
+										map[string]any{"name": "app", "image": "nginx"},
+									}},
+								},
+							},
+						}, []string{"${deployment.spec.replicas == deployment.status.availableReplicas}"}, nil),
+						generator.WithResource("service", map[string]any{
+							"apiVersion": "v1", "kind": "Service",
+							"metadata": map[string]any{
+								"name":      "${deployment.metadata.name}",
+								"namespace": "${schema.metadata.namespace}",
+							},
+							"spec": map[string]any{
+								"selector": map[string]any{"app": "rollout"},
+								"ports":    []any{map[string]any{"port": 8080, "targetPort": 8080}},
+							},
+						}, nil, nil),
+					)
+				},
+				map[string]any{"name": "rollout", "replicas": 3},
+				func(t GinkgoTInterface, ns, _ string, _ schema.GroupVersionKind, be rgdBackend) {
+					ctx := env.Context()
+					if ctx == nil {
+						ctx = context.Background()
+					}
+					depKey := types.NamespacedName{Namespace: ns, Name: "rollout"}
+
+					awaitInstanceCR(t, deploymentGVK, depKey, nil, 60*time.Second)
+
+					if isBuiltin(be) {
+						environment.Consistently(t, 2*time.Second, 250*time.Millisecond, func() error {
+							svc := &corev1.Service{}
+							if err := env.Client.Get(ctx, depKey, svc); err == nil {
+								return fmt.Errorf("service created before deployment ready")
+							}
+							return nil
+						})
+					}
+
+					dep := &appsv1.Deployment{}
+					if err := env.Client.Get(ctx, depKey, dep); err != nil {
+						t.Fatalf("get deployment: %v", err)
+					}
+					dep.Status.Replicas = 3
+					dep.Status.ReadyReplicas = 3
+					dep.Status.AvailableReplicas = 3
+					dep.Status.Conditions = []appsv1.DeploymentCondition{{
+						Type: appsv1.DeploymentAvailable, Status: corev1.ConditionTrue,
+						Reason: "MinimumReplicasAvailable",
+					}}
+					if err := env.Client.Status().Update(ctx, dep); err != nil {
+						t.Fatalf("patch deployment status: %v", err)
+					}
+
+					awaitInstanceCR(t, serviceGVK, depKey, nil, 60*time.Second)
+				},
+			)
+		},
+		Entry("builtin", parityBuiltin),
+		Entry("graph-v1alpha2", parityGraph),
+	)
 })
-
-// createParityNamespace makes a throwaway namespace for a parity spec and
-// registers cleanup.
-func createParityNamespace(t GinkgoTInterface) string {
-	t.Helper()
-	name := fmt.Sprintf("parity-%s", rand.String(6))
-	ctx := env.Context()
-	if ctx == nil {
-		ctx = context.Background()
-	}
-	ns := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: name}}
-	if err := env.Client.Create(ctx, ns); err != nil {
-		t.Fatalf("create namespace %s: %v", name, err)
-	}
-	t.Cleanup(func() { _ = env.Client.Delete(context.Background(), ns) })
-	return name
-}
-
-// awaitInstanceReady asserts the instance converges to a ready state under the
-// backend's own status convention: the built-in controller sets
-// status.state=ACTIVE, the graph backend sets status.ready=true.
-func awaitInstanceReady(t GinkgoTInterface, be rgdBackend, gvk schema.GroupVersionKind, key types.NamespacedName) {
-	t.Helper()
-	awaitInstanceCR(t, gvk, key, func(u *unstructured.Unstructured) error {
-		if be.Name() == (builtinRGDBackend{}).Name() {
-			state, _, _ := unstructured.NestedString(u.Object, "status", "state")
-			if state != string(krov1alpha1.ResourceGraphDefinitionStateActive) && state != "ACTIVE" {
-				return &notYetError{msg: "status.state=" + state + ", want ACTIVE"}
-			}
-			return nil
-		}
-		ready, found, _ := unstructured.NestedBool(u.Object, "status", "ready")
-		if !found || !ready {
-			return &notYetError{msg: fmt.Sprintf("status.ready=%v found=%v, want true", ready, found)}
-		}
-		return nil
-	}, 60*time.Second)
-}
