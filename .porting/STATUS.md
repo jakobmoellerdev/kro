@@ -258,3 +258,21 @@ and 3 real graph-backend gaps documented above.
   (Real bug: missing instance-id label on standalone collection children.)
 - #2 includeWhen-flip prune: VERIFIED real gap; kept builtin-only boundary +
   documented as future engine work. Not fixed this pass (nested reactive re-eval).
+
+## Findings — RESOLUTION (v5, FINAL — #2 FIXED)
+
+- #2 includeWhen-flip prune: FIXED (committed fb816504). Real root cause was
+  NOT nested-reactive propagation (L2 DID re-reconcile + re-evaluate includeWhen)
+  — it was that pkg/controller/graph/controller.go gated pruning on a FULLY
+  CLEAN apply (applyErr==nil). The fixture's `gate` sibling has an unsatisfiable
+  readyWhen, so the apply was perpetually soft ErrNotReady and the prune branch
+  never ran; the confidently-retired child was never deleted. Fix: prune on
+  walkComplete = clean OR soft ErrNotReady (safe: diffManagedResources excludes
+  Unresolved; executor commits the full walk on the soft path; hard errors still
+  withhold). General standalone-Graph correctness fix. Parity assertion
+  un-branched — both backends prune. Verified 3/3 + no regressions.
+
+## FINAL DISPOSITION (all findings resolved)
+- #1 GateReadiness: WONTFIX (intended production behavior).
+- #2 includeWhen-flip prune: FIXED (fb816504) — prune on soft not-ready.
+- #3 collection drift restore: FIXED (8454e7e) — stampKROMeta instance-id label.
